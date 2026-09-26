@@ -14,8 +14,8 @@ export type Address = {
   is_default: boolean;
 };
 
-export type AuthUser = { id: number; name: string; email: string; phone?: string };
-export type AdminProduct = { id: number; slug: string; name: string; brand: string; price: string; compare_at_price: string | null; image: string; images: string[]; image_url: string; category: string; tag: string; is_active: boolean; stock: number; skus: { id: number; size: string; sku: string; stock_quantity: number }[] };
+export type AuthUser = { id: number; name: string; email: string; phone?: string; is_superuser?: boolean };
+export type AdminProduct = { id: number; slug: string; name: string; brand: string; description: string; price: string; compare_at_price: string | null; image: string; images: string[]; image_items: { key: string; url: string }[]; image_url: string; category: string; tag: string; is_active: boolean; stock: number; skus: { id: number; size: string; sku: string; stock_quantity: number }[] };
 export type StoreProduct = { id: number; slug: string; name: string; brand: string; price: number; old: number; image: string; images: string[]; color: string; tag: string; description: string; category: string; variants: { id: number; size: string; sku: string; stock_quantity: number }[] };
 export type AdminSummary = { products: number; customers: number; orders: number; pending_orders: number; sales: string; recent_orders: { order_number: string; customer: string; status: string; total: string; created_at: string }[] };
 export type UserOrder = { id: number; order_number: string; status: string; payment_status: string; payment_method: "cod" | "razorpay"; created_at: string; total: string; address: { full_name: string; phone: string; line1: string; line2: string; city: string; state: string; pincode: string }; items: { name: string; image: string; quantity: number; size: string; unit_price: string }[] };
@@ -111,7 +111,7 @@ export async function getAdminProducts() {
   const result = await request<{ results: AdminProduct[] }>("/admin/products/");
   return { results: result.results.map(normalizeAdminProduct) };
 }
-const normalizeAdminProduct = (product: AdminProduct) => ({ ...product, image: normalizeImage(product.image), images: (product.images?.length ? product.images : [product.image]).map(normalizeImage).filter(Boolean) });
+const normalizeAdminProduct = (product: AdminProduct) => ({ ...product, image: normalizeImage(product.image), images: (product.images?.length ? product.images : [product.image]).map(normalizeImage).filter(Boolean), image_items: (product.image_items || []).map((item) => ({ ...item, url: normalizeImage(item.url) })) });
 export const createAdminProduct = async (form: FormData) => normalizeAdminProduct(await uploadRequest<AdminProduct>("/admin/products/", form));
 export const updateAdminProduct = async (id: number, form: FormData) => normalizeAdminProduct(await uploadRequest<AdminProduct>(`/admin/products/${id}/`, form, "PATCH"));
 export const deleteAdminProduct = (id: number) => request<{ detail: string }>(`/admin/products/${id}/`, { method: "DELETE" });
