@@ -1,25 +1,26 @@
 import json
 import time
 import importlib
+import logging
 import secrets
 from collections import defaultdict
+from datetime import timedelta
 from decimal import Decimal
 
 razorpay = importlib.import_module('razorpay')
 
 from django.contrib.auth import authenticate, get_user_model, password_validation
 from django.contrib.auth.hashers import check_password, make_password
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
 from django.core.validators import validate_email
-from django.conf import settings
 from django.core.files.storage import default_storage
 from django.db import transaction
 from django.db.models import Q, Count, Sum
 from django.db.models.deletion import ProtectedError
 from django.utils.text import slugify
 from django.utils import timezone
-from datetime import timedelta
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
@@ -27,9 +28,16 @@ from django.views.decorators.http import require_http_methods
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view, authentication_classes, permission_classes, throttle_scope
 from rest_framework.authentication import TokenAuthentication
-from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
+from rest_framework.permissions import AllowAny, BasePermission, IsAuthenticated
 
 from .models import Address, Cart, CartItem, Category, CustomerProfile, Order, OrderItem, Product, ProductImage, ProductVariant, SignupVerification, SupportTicket, WishlistItem
+
+logger = logging.getLogger(__name__)
+
+
+class IsSuperuser(BasePermission):
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and request.user.is_active and request.user.is_superuser)
 
 
 def product_data(product):
@@ -120,9 +128,14 @@ def product_filters(request):
 
 def admin_product_data(product):
     data = product_data(product)
+    image_items = []
+    if product.image:
+        image_items.append({'key': 'primary', 'url': product.image.url})
+    image_items.extend({'key': f'gallery:{image.id}', 'url': image.image.url} for image in product.gallery_images.all())
     data.update({
         'image_url': product.image_url,
         'images': data['images'],
+        'image_items': image_items,
         'is_active': product.is_active,
         'is_featured': product.is_featured,
         'created_at': product.created_at.isoformat(),
@@ -159,9 +172,47 @@ def admin_product_payload(request, product=None):
     return values, None
 
 
+def admin_product_sizes_and_stock(request, fallback_sizes=None):
+    raw_sizes = request.data.get('sizes')
+    if raw_sizes is None:
+        raw_sizes = ','.join(fallback_sizes or ['S', 'M', 'L', 'XL', 'XXL'])
+    sizes = list(dict.fromkeys(size.strip().upper() for size in str(raw_sizes).split(',') if size.strip()))
+    if not sizes:
+        return None, None, 'Add at least one product size.'
+    if any(len(size) > 10 for size in sizes):
+        return None, None, 'Each size must be 10 characters or fewer.'
+    raw_inventory = request.data.get('stock_by_size')
+    if raw_inventory is None:
+        try:
+            quantity = int(request.data.get('stock_quantity', 0))
+            if quantity < 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            return None, None, 'Stock quantities must be zero or greater.'
+        return sizes, {size: quantity for size in sizes}, None
+    try:
+        inventory = json.loads(raw_inventory) if isinstance(raw_inventory, str) else raw_inventory
+    except (TypeError, ValueError):
+        return None, None, 'Inventory by size must be valid JSON.'
+    if not isinstance(inventory, dict):
+        return None, None, 'Inventory by size must be a size-to-quantity map.'
+    normalized = {str(size).strip().upper(): quantity for size, quantity in inventory.items()}
+    if set(normalized) != set(sizes):
+        return None, None, 'Enter a stock quantity for every selected size.'
+    try:
+        quantities = {}
+        for size, quantity in normalized.items():
+            if isinstance(quantity, bool) or not str(quantity).strip().isdigit():
+                raise ValueError
+            quantities[size] = int(quantity)
+    except (TypeError, ValueError):
+        return None, None, 'Stock quantities must be whole numbers of zero or greater.'
+    return sizes, quantities, None
+
+
 @api_view(['GET', 'POST'])
 @authentication_classes([TokenAuthentication])
-@permission_classes([IsAdminUser])
+@permission_classes([IsSuperuser])
 def admin_product_list(request):
     if request.method == 'GET':
         products = Product.objects.select_related('category').prefetch_related('variants', 'gallery_images').order_by('-created_at')
@@ -169,58 +220,129 @@ def admin_product_list(request):
     values, error = admin_product_payload(request)
     if error:
         return JsonResponse({'detail': error}, status=400)
+    sizes, stock_by_size, error = admin_product_sizes_and_stock(request)
+    if error:
+        return JsonResponse({'detail': error}, status=400)
+    try:
+        image_order = request.data.get('image_order')
+        image_order = json.loads(image_order) if isinstance(image_order, str) else image_order
+        if image_order is not None and (not isinstance(image_order, list) or any(not isinstance(key, str) for key in image_order)):
+            raise ValueError
+    except (TypeError, ValueError):
+        return JsonResponse({'detail': 'Image order must be a list of image keys.'}, status=400)
     with transaction.atomic():
         product = Product.objects.create(**values)
-        for size in str(request.data.get('sizes', 'S,M,L,XL,XXL')).split(','):
-            size = size.strip().upper()
-            if size:
-                ProductVariant.objects.create(product=product, size=size, sku=f'{product.slug.upper()}-{size}', stock_quantity=int(request.data.get('stock_quantity', 0)))
-    primary_upload = request.FILES.get('image')
-    if primary_upload:
-        product.image = primary_upload
+        for size in sizes:
+            ProductVariant.objects.create(product=product, size=size, sku=f'{product.slug.upper()}-{size}', stock_quantity=stock_by_size[size])
+    if request.FILES.get('image'):
+        product.image = request.FILES['image']
         product.save(update_fields=['image', 'updated_at'])
-    uploads = request.FILES.getlist('images')
-    for position, upload in enumerate(uploads, start=product.gallery_images.count()):
-        ProductImage.objects.create(product=product, image=upload, position=position)
+    uploaded = [ProductImage.objects.create(product=product, image=upload, position=position) for position, upload in enumerate(request.FILES.getlist('images'))]
+    if image_order is not None:
+        ordered = [uploaded[int(key[7:])] for key in image_order if key.startswith('upload:') and key[7:].isdigit() and int(key[7:]) < len(uploaded)]
+        if ordered:
+            cover = ordered.pop(0)
+            product.image.name = cover.image.name
+            product.save(update_fields=['image', 'updated_at'])
+            cover.delete()
+        for position, image in enumerate(ordered):
+            image.position = position
+            image.save(update_fields=['position', 'updated_at'])
+        ordered_ids = [image.id for image in ordered]
+        for image in product.gallery_images.exclude(id__in=ordered_ids):
+            default_storage.delete(image.image.name)
+            image.delete()
     return JsonResponse(admin_product_data(product), status=201)
 
 
 @api_view(['PATCH', 'DELETE'])
 @authentication_classes([TokenAuthentication])
-@permission_classes([IsAdminUser])
+@permission_classes([IsSuperuser])
 def admin_product_detail(request, product_id):
     product = get_object_or_404(Product, id=product_id)
     if request.method == 'DELETE':
         if product.image:
             default_storage.delete(product.image.name)
-        for product_image in product.gallery_images.all():
-            default_storage.delete(product_image.image.name)
+        for gallery_image in product.gallery_images.all():
+            default_storage.delete(gallery_image.image.name)
         product.delete()
         return JsonResponse({'detail': 'Product deleted.'})
     values, error = admin_product_payload(request, product)
     if error:
         return JsonResponse({'detail': error}, status=400)
+    sizes, stock_by_size, error = admin_product_sizes_and_stock(request, list(product.variants.values_list('size', flat=True)))
+    if error:
+        return JsonResponse({'detail': error}, status=400)
+    try:
+        image_order = request.data.get('image_order')
+        image_order = json.loads(image_order) if isinstance(image_order, str) else image_order
+        if image_order is not None and (not isinstance(image_order, list) or any(not isinstance(key, str) for key in image_order)):
+            raise ValueError
+    except (TypeError, ValueError):
+        return JsonResponse({'detail': 'Image order must be a list of image keys.'}, status=400)
     for field, value in values.items():
         setattr(product, field, value)
     if request.FILES.get('image'):
         product.image = request.FILES['image']
     product.save()
-    uploads = request.FILES.getlist('images')
-    for position, upload in enumerate(uploads, start=product.gallery_images.count()):
-        ProductImage.objects.create(product=product, image=upload, position=position)
-    sizes = {size.strip().upper() for size in str(request.data.get('sizes', 'S,M,L,XL,XXL')).split(',') if size.strip()}
-    stock_quantity = int(request.data.get('stock_quantity', 0))
+    uploaded = []
+    for upload in request.FILES.getlist('images'):
+        uploaded.append(ProductImage.objects.create(product=product, image=upload, position=product.gallery_images.count()))
+    if image_order is not None:
+        if 'primary' not in image_order and product.image:
+            default_storage.delete(product.image.name)
+            product.image = None
+            product.save(update_fields=['image', 'updated_at'])
+        resolved_order = []
+        for key in image_order:
+            if key == 'primary' and product.image:
+                resolved_order.append(('primary', None))
+            elif key == 'external' and product.image_url:
+                resolved_order.append(('external', None))
+            elif key.startswith('gallery:') and key[8:].isdigit():
+                image = product.gallery_images.filter(id=int(key[8:])).first()
+                if image:
+                    resolved_order.append(('gallery', image))
+            elif key.startswith('upload:') and key[7:].isdigit() and int(key[7:]) < len(uploaded):
+                resolved_order.append(('gallery', uploaded[int(key[7:])]))
+        promoted_old_primary = None
+        if resolved_order and resolved_order[0][0] == 'gallery':
+            cover = resolved_order.pop(0)[1]
+            old_primary_name = product.image.name if product.image else ''
+            new_primary_name = cover.image.name
+            product.image.name = new_primary_name
+            product.save(update_fields=['image', 'updated_at'])
+            if old_primary_name:
+                cover.image.name = old_primary_name
+                cover.save(update_fields=['image', 'updated_at'])
+                promoted_old_primary = cover
+            else:
+                cover.delete()
+        elif not resolved_order or resolved_order[0][0] != 'primary':
+            if product.image:
+                default_storage.delete(product.image.name)
+                product.image = None
+                product.save(update_fields=['image', 'updated_at'])
+        gallery_order = ([promoted_old_primary] if promoted_old_primary else []) + [image for kind, image in resolved_order if kind == 'gallery']
+        retained_ids = [image.id for image in gallery_order]
+        for image in product.gallery_images.exclude(id__in=retained_ids):
+            default_storage.delete(image.image.name)
+            image.delete()
+        for position, image in enumerate(gallery_order):
+            if image.position != position:
+                image.position = position
+                image.save(update_fields=['position', 'updated_at'])
     product.variants.exclude(size__in=sizes).delete()
     for size in sizes:
         variant, _ = ProductVariant.objects.get_or_create(product=product, size=size, defaults={'sku': f'{product.slug.upper()}-{size}'})
-        variant.stock_quantity = stock_quantity
+        variant.stock_quantity = stock_by_size[size]
         variant.save(update_fields=['stock_quantity', 'updated_at'])
     return JsonResponse(admin_product_data(product))
 
 
 @api_view(['GET'])
 @authentication_classes([TokenAuthentication])
-@permission_classes([IsAdminUser])
+@permission_classes([IsSuperuser])
 def admin_summary(request):
     orders = Order.objects.select_related('customer__user').order_by('-created_at')
     return JsonResponse({
@@ -246,26 +368,36 @@ def order_data(order):
         'created_at': order.created_at.isoformat(),
         'total': str(order.total),
         'address': {'full_name': order.address.full_name, 'phone': order.address.phone, 'line1': order.address.line1, 'line2': order.address.line2, 'city': order.address.city, 'state': order.address.state, 'pincode': order.address.pincode},
-        'items': [{'name': item.product.name, 'image': item.product.image.url if item.product.image else item.product.image_url, 'quantity': item.quantity, 'size': item.variant.size, 'unit_price': str(item.unit_price)} for item in order.items.select_related('product', 'variant').all()],
+        'items': [{'name': item.product.name, 'image': product_primary_image(item.product), 'quantity': item.quantity, 'size': item.variant.size, 'unit_price': str(item.unit_price)} for item in order.items.select_related('product', 'variant').all()],
     }
+
+
+def product_primary_image(product):
+    if product.image:
+        return product.image.url
+    gallery_image = next(iter(product.gallery_images.all()), None)
+    if gallery_image:
+        return gallery_image.image.url
+    return product.image_url
 
 
 @api_view(['GET'])
 @authentication_classes([TokenAuthentication])
 @permission_classes([IsAuthenticated])
 def order_list(request):
-    orders = Order.objects.filter(customer__user=request.user).prefetch_related('items__product', 'items__variant')
+    orders = Order.objects.filter(customer__user=request.user).prefetch_related('items__product__gallery_images', 'items__variant')
     status = request.GET.get('status')
     if status and status != 'all':
         orders = orders.filter(status=status)
     return JsonResponse({'count': orders.count(), 'results': [order_data(order) for order in orders]})
 
 
+
 @api_view(['GET'])
 @authentication_classes([TokenAuthentication])
-@permission_classes([IsAdminUser])
+@permission_classes([IsSuperuser])
 def admin_order_list(request):
-    orders = Order.objects.select_related('customer__user', 'address').prefetch_related('items__product', 'items__variant')
+    orders = Order.objects.select_related('customer__user', 'address').prefetch_related('items__product__gallery_images', 'items__variant')
     results = []
     for order in orders:
         data = order_data(order)
@@ -288,7 +420,7 @@ def deduct_order_stock(order):
     for variant_id, quantity in quantities.items():
         variant = ProductVariant.objects.select_for_update().select_related('product').get(id=variant_id)
         if variant.stock_quantity < quantity:
-            raise InsufficientStock(f'Not enough stock for {variant.product.name} ({variant.size}). Available: {variant.stock_quantity}.')
+            raise InsufficientStock(f'Not enough stock for {variant.product.name} ({variant.size}).')
         variant.stock_quantity -= quantity
         variant.save(update_fields=['stock_quantity', 'updated_at'])
     order.stock_deducted = True
@@ -309,7 +441,7 @@ def restore_order_stock(order):
 
 @api_view(['PATCH'])
 @authentication_classes([TokenAuthentication])
-@permission_classes([IsAdminUser])
+@permission_classes([IsSuperuser])
 def admin_order_status_update(request, order_id):
     status = request.data.get('status')
     if status not in Order.Status.values:
@@ -330,27 +462,32 @@ def admin_order_status_update(request, order_id):
 
 @api_view(['GET'])
 @authentication_classes([TokenAuthentication])
-@permission_classes([IsAdminUser])
+@permission_classes([IsSuperuser])
 def admin_customer_list(request):
     customers = CustomerProfile.objects.select_related('user').annotate(
         order_count=Count('orders', distinct=True), total_spent=Sum('orders__total'),
     ).order_by('-created_at')
-    return JsonResponse({'results': [{'id': customer.id, 'name': customer.user.get_full_name() or customer.user.email,
-        'email': customer.user.email, 'phone': customer.phone, 'order_count': customer.order_count,
-        'total_spent': str(customer.total_spent or Decimal('0.00')), 'joined_at': customer.created_at.isoformat()}
-        for customer in customers]})
+    return JsonResponse({'results': [
+        {'id': customer.id, 'name': customer.user.get_full_name() or customer.user.email,
+         'email': customer.user.email, 'phone': customer.phone, 'order_count': customer.order_count,
+         'total_spent': str(customer.total_spent or Decimal('0.00')), 'joined_at': customer.created_at.isoformat()}
+        for customer in customers
+    ]})
 
 
 def admin_ticket_data(ticket):
-    user = ticket.customer.user if ticket.customer_id else None
-    return {'id': ticket.id, 'subject': ticket.subject, 'message': ticket.message, 'status': ticket.status,
-        'customer': (user.get_full_name() or user.email) if user else 'Deleted customer',
-        'email': user.email if user else '', 'created_at': ticket.created_at.isoformat()}
+    return {
+        'id': ticket.id, 'subject': ticket.subject, 'message': ticket.message,
+        'status': ticket.status,
+        'customer': (ticket.customer.user.get_full_name() or ticket.customer.user.email) if ticket.customer else 'Guest',
+        'email': ticket.customer.user.email if ticket.customer else '',
+        'created_at': ticket.created_at.isoformat(),
+    }
 
 
 @api_view(['GET'])
 @authentication_classes([TokenAuthentication])
-@permission_classes([IsAdminUser])
+@permission_classes([IsSuperuser])
 def admin_support_tickets(request):
     tickets = SupportTicket.objects.select_related('customer__user').order_by('-created_at')
     return JsonResponse({'results': [admin_ticket_data(ticket) for ticket in tickets]})
@@ -358,10 +495,10 @@ def admin_support_tickets(request):
 
 @api_view(['PATCH'])
 @authentication_classes([TokenAuthentication])
-@permission_classes([IsAdminUser])
+@permission_classes([IsSuperuser])
 def admin_support_ticket_update(request, ticket_id):
     ticket = get_object_or_404(SupportTicket, id=ticket_id)
-    status = request.data.get('status')
+    status = str(request.data.get('status', '')).strip()
     if status not in {'open', 'in_progress', 'resolved', 'closed'}:
         return JsonResponse({'detail': 'Choose a valid support status.'}, status=400)
     ticket.status = status
@@ -371,44 +508,49 @@ def admin_support_ticket_update(request, ticket_id):
 
 @api_view(['GET'])
 @authentication_classes([TokenAuthentication])
-@permission_classes([IsAdminUser])
+@permission_classes([IsSuperuser])
 def admin_analytics(request):
-    today = timezone.localdate()
-    start = today - timedelta(days=6)
     orders = Order.objects.all()
-    daily = {(start + timedelta(days=index)).isoformat(): {'orders': 0, 'sales': Decimal('0.00')} for index in range(7)}
-    for order in orders.filter(created_at__date__gte=start).only('created_at', 'total'):
-        key = timezone.localtime(order.created_at).date().isoformat()
-        if key in daily:
-            daily[key]['orders'] += 1
-            daily[key]['sales'] += order.total
-    cod = orders.filter(payment_reference='COD')
-    online = orders.exclude(payment_reference='COD')
-    return JsonResponse({'orders': orders.count(),
-        'gross_sales': str(orders.aggregate(total=Sum('total'))['total'] or Decimal('0.00')),
-        'cod_orders': cod.count(), 'cod_sales': str(cod.aggregate(total=Sum('total'))['total'] or Decimal('0.00')),
-        'online_orders': online.count(), 'online_sales': str(online.aggregate(total=Sum('total'))['total'] or Decimal('0.00')),
-        'pending_orders': orders.filter(status__in=['pending', 'confirmed', 'processing']).count(),
-        'statuses': list(orders.values('status').annotate(count=Count('id')).order_by('status')),
-        'daily_sales': [{'date': key, 'orders': value['orders'], 'sales': str(value['sales'])} for key, value in daily.items()]})
+    paid_or_cod = orders.exclude(status=Order.Status.CANCELLED)
+    online = paid_or_cod.exclude(payment_reference='COD')
+    cod = paid_or_cod.filter(payment_reference='COD')
+    daily = []
+    for day in range(6, -1, -1):
+        date = timezone.localdate() - timedelta(days=day)
+        day_orders = paid_or_cod.filter(created_at__date=date)
+        daily.append({'date': date.isoformat(), 'orders': day_orders.count(), 'sales': str(sum(item.total for item in day_orders))})
+    return JsonResponse({
+        'orders': orders.count(), 'gross_sales': str(sum(order.total for order in paid_or_cod)),
+        'cod_orders': cod.count(), 'cod_sales': str(sum(order.total for order in cod)),
+        'online_orders': online.count(), 'online_sales': str(sum(order.total for order in online)),
+        'pending_orders': orders.filter(status=Order.Status.PENDING).count(),
+        'statuses': [{'status': status, 'count': orders.filter(status=status).count()} for status, _ in Order.Status.choices],
+        'daily_sales': daily,
+    })
 
 
 @api_view(['GET'])
 @authentication_classes([TokenAuthentication])
-@permission_classes([IsAdminUser])
+@permission_classes([IsSuperuser])
 def admin_notifications(request):
     events = []
     for order in Order.objects.select_related('customer__user').order_by('-created_at')[:30]:
-        customer = order.customer.user.get_full_name() or order.customer.user.email
-        mode = 'Cash on delivery' if order.payment_reference == 'COD' else 'Razorpay'
-        events.append({'id': f'order-{order.id}', 'kind': 'order', 'title': f'Order {order.order_number} placed',
-            'detail': f'{customer} · {mode} · ₹{order.total}', 'created_at': order.created_at.isoformat(), 'url': '/admin/orders'})
-    for ticket in SupportTicket.objects.select_related('customer__user').order_by('-created_at')[:30]:
-        data = admin_ticket_data(ticket)
-        events.append({'id': f'ticket-{ticket.id}', 'kind': 'support', 'title': f"Support request: {ticket.subject}",
-            'detail': f"{data['customer']} · {ticket.status.replace('_', ' ')}", 'created_at': ticket.created_at.isoformat(), 'url': '/admin/support'})
+        name = order.customer.user.get_full_name() or order.customer.user.email
+        method = 'Cash on delivery' if order.payment_reference == 'COD' else 'Razorpay'
+        events.append({
+            'id': f'order-{order.id}', 'kind': 'order', 'title': f'Order {order.order_number} placed',
+            'detail': f'{name} ? {method} ? ?{order.total}', 'created_at': order.created_at.isoformat(),
+            'url': '/admin/orders',
+        })
+    for ticket in SupportTicket.objects.order_by('-created_at')[:20]:
+        events.append({
+            'id': f'ticket-{ticket.id}', 'kind': 'support', 'title': ticket.subject,
+            'detail': f'Support request ? {ticket.status}', 'created_at': ticket.created_at.isoformat(),
+            'url': '/admin/support',
+        })
     events.sort(key=lambda event: event['created_at'], reverse=True)
     return JsonResponse({'count': len(events), 'results': events[:40]})
+
 
 
 def cart_item_data(item):
@@ -500,13 +642,29 @@ def create_payment_order(request):
         return JsonResponse({'detail': 'Razorpay is not configured on the backend.'}, status=503)
     client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_SECRET))
     try:
-        payment_order = client.order.create({'amount': int(subtotal * 100), 'currency': 'INR', 'receipt': f'humbell-{request.user.id}-{secrets.token_hex(8)}', 'payment_capture': 1})
+        payment_order = client.order.create({
+            'amount': int(subtotal * 100), 'currency': 'INR',
+            'receipt': f'humbell-{request.user.id}-{secrets.token_hex(8)}', 'payment_capture': 1,
+        })
     except Exception:
+        logger.exception('Razorpay order creation failed.')
         return JsonResponse({'detail': 'Razorpay could not create a payment order. Please try again.'}, status=502)
     with transaction.atomic():
-        order = Order.objects.create(customer=profile, address=address, order_number=f'HBL-{int(time.time())}-{request.user.id}-{secrets.token_hex(2).upper()}', subtotal=subtotal, total=subtotal, payment_reference=payment_order['id'])
-        OrderItem.objects.bulk_create([OrderItem(order=order, product=item.variant.product, variant=item.variant, quantity=item.quantity, unit_price=item.variant.product.price) for item in items])
-    return JsonResponse({'id': payment_order['id'], 'amount': payment_order['amount'], 'currency': payment_order['currency'], 'key_id': settings.RAZORPAY_KEY_ID, 'order_number': order.order_number})
+        order = Order.objects.create(
+            customer=profile, address=address,
+            order_number=f'HBL-{int(time.time())}-{request.user.id}-{secrets.token_hex(2).upper()}',
+            subtotal=subtotal, total=subtotal, payment_reference=payment_order['id'],
+        )
+        OrderItem.objects.bulk_create([
+            OrderItem(order=order, product=item.variant.product, variant=item.variant,
+                      quantity=item.quantity, unit_price=item.variant.product.price)
+            for item in items
+        ])
+    return JsonResponse({
+        'id': payment_order['id'], 'amount': payment_order['amount'],
+        'currency': payment_order['currency'], 'key_id': settings.RAZORPAY_KEY_ID,
+        'order_number': order.order_number,
+    })
 
 
 @api_view(['POST'])
@@ -514,8 +672,7 @@ def create_payment_order(request):
 @permission_classes([IsAuthenticated])
 def create_cod_order(request):
     profile = profile_for(request.user)
-    address_id = request.data.get('address_id')
-    address = profile.addresses.filter(id=address_id).first() if address_id else None
+    address = profile.addresses.filter(id=request.data.get('address_id')).first()
     if not address:
         return JsonResponse({'detail': 'Choose a valid delivery address.'}, status=400)
     cart = Cart.objects.filter(customer=profile).first()
@@ -528,13 +685,9 @@ def create_cod_order(request):
     subtotal = sum((item.variant.product.price * item.quantity for item in items), Decimal('0'))
     with transaction.atomic():
         order = Order.objects.create(
-            customer=profile,
-            address=address,
+            customer=profile, address=address,
             order_number=f'HBL-{int(time.time())}-{request.user.id}-{secrets.token_hex(2).upper()}',
-            subtotal=subtotal,
-            total=subtotal,
-            payment_status='pending',
-            payment_reference='COD',
+            subtotal=subtotal, total=subtotal, payment_status='pending', payment_reference='COD',
         )
         OrderItem.objects.bulk_create([
             OrderItem(order=order, product=item.variant.product, variant=item.variant,
@@ -543,11 +696,8 @@ def create_cod_order(request):
         ])
         CartItem.objects.filter(cart=cart).delete()
     return JsonResponse({
-        'order_number': order.order_number,
-        'status': order.status,
-        'payment_status': order.payment_status,
-        'payment_method': 'cod',
-        'total': str(order.total),
+        'order_number': order.order_number, 'status': order.status,
+        'payment_status': order.payment_status, 'payment_method': 'cod', 'total': str(order.total),
     }, status=201)
 
 
@@ -558,36 +708,31 @@ def verify_payment(request):
     required = ('razorpay_order_id', 'razorpay_payment_id', 'razorpay_signature')
     if any(not request.data.get(field) for field in required):
         return JsonResponse({'detail': 'Incomplete Razorpay payment response.'}, status=400)
+    if not settings.RAZORPAY_KEY_ID or not settings.RAZORPAY_SECRET:
+        return JsonResponse({'detail': 'Razorpay is not configured on the backend.'}, status=503)
     client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_SECRET))
     try:
         client.utility.verify_payment_signature({field: request.data[field] for field in required})
     except razorpay.errors.SignatureVerificationError:
         return JsonResponse({'detail': 'Payment signature verification failed.'}, status=400)
     except Exception:
+        logger.exception('Razorpay signature verification unavailable.')
         return JsonResponse({'detail': 'Unable to verify payment with Razorpay right now.'}, status=502)
-
     order = get_object_or_404(
         Order, payment_reference=request.data['razorpay_order_id'], customer__user=request.user,
     )
     try:
         payment = client.payment.fetch(request.data['razorpay_payment_id'])
+        amount = int(payment.get('amount', 0))
     except Exception:
+        logger.exception('Razorpay payment lookup failed.')
         return JsonResponse({'detail': 'Unable to confirm payment status with Razorpay right now.'}, status=502)
-    expected_amount = int(order.total * 100)
-    try:
-        captured_amount = int(payment.get('amount', 0))
-    except (AttributeError, TypeError, ValueError):
-        return JsonResponse({'detail': 'Razorpay returned an invalid payment record.'}, status=502)
     if (payment.get('order_id') != request.data['razorpay_order_id']
-            or captured_amount != expected_amount
-            or payment.get('status') != 'captured'):
+            or amount != int(order.total * 100) or payment.get('status') != 'captured'):
         return JsonResponse({'detail': 'Payment is not captured for this order and amount.'}, status=409)
-
     try:
         with transaction.atomic():
-            order = get_object_or_404(Order.objects.select_for_update(), id=order.id, customer__user=request.user)
-            if order.payment_status == 'paid':
-                return JsonResponse({'verified': True, 'payment_id': request.data['razorpay_payment_id'], 'order_number': order.order_number})
+            order = get_object_or_404(Order.objects.select_for_update(), id=order.id)
             deduct_order_stock(order)
             order.payment_status = 'paid'
             order.payment_reference = request.data['razorpay_payment_id']
@@ -595,19 +740,18 @@ def verify_payment(request):
             order.save(update_fields=['payment_status', 'payment_reference', 'status', 'stock_deducted', 'updated_at'])
     except InsufficientStock:
         payment_id = request.data['razorpay_payment_id']
-        amount_paise = int(order.total * 100)
         try:
-            client.payment.refund(payment_id, amount_paise)
+            client.payment.refund(payment_id, int(order.total * 100))
         except Exception:
             order.payment_reference = payment_id
             order.payment_status = 'refund_pending'
             order.save(update_fields=['payment_reference', 'payment_status', 'updated_at'])
-            return JsonResponse({'detail': 'The payment went through but stock ran out. Your refund is being reviewed; contact support if it does not arrive.'}, status=503)
+            return JsonResponse({'detail': 'Payment received but inventory ran out. Your refund is pending review.'}, status=503)
         order.payment_reference = payment_id
         order.payment_status = 'refunded'
         order.status = Order.Status.CANCELLED
         order.save(update_fields=['payment_reference', 'payment_status', 'status', 'updated_at'])
-        return JsonResponse({'detail': 'The item sold out before confirmation. Razorpay has been asked to refund your payment.'}, status=409)
+        return JsonResponse({'detail': 'Inventory ran out. Razorpay has been asked to refund your payment.'}, status=409)
     CartItem.objects.filter(cart__customer__user=request.user).delete()
     return JsonResponse({'verified': True, 'payment_id': request.data['razorpay_payment_id'], 'order_number': order.order_number})
 
@@ -643,47 +787,29 @@ def address_data(address):
 @permission_classes([AllowAny])
 @throttle_scope('signup_otp')
 def send_signup_otp(request):
-    data = request.data
-    email = str(data.get('email', '')).strip().lower()
-    full_name = str(data.get('full_name', '')).strip()
-    password = data.get('password', '')
-    if not full_name or not email or len(password) < 8:
-        return JsonResponse({'detail': 'Name, email, and a password of at least 8 characters are required.'}, status=400)
+    email = str(request.data.get('email', '')).strip().lower()
     try:
         validate_email(email)
-        password_validation.validate_password(password)
-    except ValidationError as error:
-        return JsonResponse({'detail': ' '.join(error.messages)}, status=400)
+    except ValidationError:
+        return JsonResponse({'detail': 'Enter a valid email address.'}, status=400)
     User = get_user_model()
     if User.objects.filter(username=email).exists():
         return JsonResponse({'detail': 'An account with this email already exists.'}, status=409)
-    if not settings.EMAIL_HOST_USER or not settings.EMAIL_HOST_PASSWORD:
-        return JsonResponse({'detail': 'Email verification is not configured. Add EMAIL and PASSWORD to backend/.env.'}, status=503)
-
-    now = timezone.now()
-    verification = SignupVerification.objects.filter(email=email).first()
-    if verification and verification.updated_at > now - timedelta(seconds=60):
-        return JsonResponse({'detail': 'Please wait 60 seconds before requesting another code.'}, status=429)
-    code = f'{secrets.randbelow(1_000_000):06d}'
-    code_hash = make_password(code)
-    verification, _ = SignupVerification.objects.update_or_create(
-        email=email,
-        defaults={'code_hash': code_hash, 'expires_at': now + timedelta(minutes=10), 'attempts': 0},
-    )
+    if not getattr(settings, 'EMAIL_HOST', ''):
+        return JsonResponse({'detail': 'Email verification is not configured on the server.'}, status=503)
+    recent = SignupVerification.objects.filter(email=email, created_at__gte=timezone.now() - timedelta(seconds=60)).exists()
+    if recent:
+        return JsonResponse({'detail': 'Please wait before requesting another code.'}, status=429)
+    code = f'{secrets.randbelow(1000000):06d}'
+    SignupVerification.objects.filter(email=email).delete()
+    SignupVerification.objects.create(email=email, code_hash=make_password(code), expires_at=timezone.now() + timedelta(minutes=10))
     try:
-        sent = send_mail(
-            'Your Humbell signup verification code',
-            f'Your Humbell verification code is {code}. It expires in 10 minutes. If you did not request this, you can ignore this email.',
-            settings.DEFAULT_FROM_EMAIL,
-            [email],
-            fail_silently=False,
-        )
-        if sent != 1:
-            raise RuntimeError('Email provider did not accept the verification message.')
-    except Exception:
-        SignupVerification.objects.filter(email=email, code_hash=code_hash).delete()
+        send_mail('Your HUMBELL verification code', f'Your verification code is {code}. It expires in 10 minutes.', settings.DEFAULT_FROM_EMAIL, [email], fail_silently=False)
+    except Exception as exc:
+        logger.warning('Signup verification email failed: %s', type(exc).__name__)
+        SignupVerification.objects.filter(email=email).delete()
         return JsonResponse({'detail': 'We could not send the verification email. Check the SMTP settings and try again.'}, status=503)
-    return JsonResponse({'detail': 'Verification code sent. Check your email.'})
+    return JsonResponse({'detail': 'Verification code sent.'})
 
 
 @api_view(['POST'])
@@ -691,41 +817,23 @@ def send_signup_otp(request):
 @throttle_scope('signup')
 def signup(request):
     data = request.data
-    email = str(data.get('email', '')).strip().lower()
-    full_name = str(data.get('full_name', '')).strip()
+    email = data.get('email', '').strip().lower()
     password = data.get('password', '')
-    code = str(data.get('otp', '')).strip()
-    if not email or not full_name or len(password) < 8 or not code:
-        return JsonResponse({'detail': 'Name, email, password, and verification code are required.'}, status=400)
-    try:
-        validate_email(email)
-        password_validation.validate_password(password)
-    except ValidationError as error:
-        return JsonResponse({'detail': ' '.join(error.messages)}, status=400)
-
+    if not email or len(password) < 8:
+        return JsonResponse({'detail': 'Email and a password of at least 8 characters are required.'}, status=400)
     User = get_user_model()
-    with transaction.atomic():
-        verification = SignupVerification.objects.select_for_update().filter(email=email).first()
-        if not verification:
-            return JsonResponse({'detail': 'Request a verification code before creating your account.'}, status=400)
-        if verification.expires_at <= timezone.now():
-            verification.delete()
-            return JsonResponse({'detail': 'That verification code has expired. Request a new one.'}, status=400)
-        if verification.attempts >= 5:
-            return JsonResponse({'detail': 'Too many incorrect codes. Request a new verification code.'}, status=429)
-        if not check_password(code, verification.code_hash):
-            verification.attempts += 1
-            verification.save(update_fields=['attempts', 'updated_at'])
-            return JsonResponse({'detail': 'That verification code is incorrect.'}, status=400)
-        if User.objects.filter(username=email).exists():
-            verification.delete()
-            return JsonResponse({'detail': 'An account with this email already exists.'}, status=409)
-        user = User.objects.create_user(username=email, email=email, password=password, first_name=full_name)
-        profile = profile_for(user)
-        profile.phone = str(data.get('phone', '')).strip()
-        profile.save(update_fields=['phone', 'updated_at'])
-        token = Token.objects.create(user=user)
-        verification.delete()
+    if User.objects.filter(username=email).exists():
+        return JsonResponse({'detail': 'An account with this email already exists.'}, status=409)
+    code = str(data.get('code', '')).strip()
+    verification = SignupVerification.objects.filter(email=email).order_by('-created_at').first()
+    if not verification or not verification.expires_at or verification.expires_at <= timezone.now() or not code or not check_password(code, verification.code_hash):
+        return JsonResponse({'detail': 'Enter a valid, unexpired email verification code.'}, status=400)
+    user = User.objects.create_user(username=email, email=email, password=password, first_name=data.get('full_name', '').strip())
+    profile = profile_for(user)
+    profile.phone = data.get('phone', '').strip()
+    profile.save(update_fields=['phone', 'updated_at'])
+    token = Token.objects.create(user=user)
+    SignupVerification.objects.filter(email=email).delete()
     return JsonResponse({'token': token.key, 'user': {'id': user.id, 'name': user.get_full_name(), 'email': user.email}}, status=201)
 
 
@@ -733,7 +841,7 @@ def signup(request):
 @permission_classes([AllowAny])
 @throttle_scope('login')
 def login(request):
-    email = str(request.data.get('email', '')).strip().lower()
+    email = request.data.get('email', '').strip().lower()
     user = authenticate(username=email, password=request.data.get('password', ''))
     if not user:
         return JsonResponse({'detail': 'Invalid email or password.'}, status=401)
@@ -754,29 +862,24 @@ def logout(request):
 @permission_classes([IsAuthenticated])
 def me(request):
     profile = profile_for(request.user)
-    return JsonResponse({'id': request.user.id, 'name': request.user.get_full_name(), 'email': request.user.email, 'phone': profile.phone})
+    return JsonResponse({'id': request.user.id, 'name': request.user.get_full_name(), 'email': request.user.email, 'phone': profile.phone, 'is_superuser': request.user.is_superuser})
 
 
 @api_view(['POST'])
 @authentication_classes([TokenAuthentication])
 @permission_classes([IsAuthenticated])
 def change_password(request):
-    current_password = request.data.get('current_password', '')
-    new_password = request.data.get('new_password', '')
-    confirm_password = request.data.get('confirm_password', '')
-    if not current_password or not new_password or not confirm_password:
-        return JsonResponse({'detail': 'Complete all password fields.'}, status=400)
-    if not request.user.check_password(current_password):
-        return JsonResponse({'detail': 'Your current password is incorrect.'}, status=400)
-    if new_password != confirm_password:
-        return JsonResponse({'detail': 'The new passwords do not match.'}, status=400)
+    current = request.data.get('current_password', '')
+    new = request.data.get('new_password', '')
+    if not request.user.check_password(current):
+        return JsonResponse({'detail': 'Current password is incorrect.'}, status=400)
     try:
-        password_validation.validate_password(new_password, request.user)
-    except ValidationError as error:
-        return JsonResponse({'detail': ' '.join(error.messages)}, status=400)
-    request.user.set_password(new_password)
+        password_validation.validate_password(new, request.user)
+    except ValidationError as exc:
+        return JsonResponse({'detail': ' '.join(exc.messages)}, status=400)
+    request.user.set_password(new)
     request.user.save(update_fields=['password'])
-    return JsonResponse({'detail': 'Your password has been changed.'})
+    return JsonResponse({'detail': 'Password changed successfully.'})
 
 
 @api_view(['GET', 'POST'])
@@ -790,12 +893,9 @@ def address_list(request):
     required = ('full_name', 'phone', 'line1', 'city', 'state', 'pincode')
     if any(not data.get(field) for field in required):
         return JsonResponse({'detail': 'All required address fields must be provided.'}, status=400)
-    make_default = bool(data.get('is_default')) or not profile.addresses.filter(is_default=True).exists()
-    if make_default:
+    if data.get('is_default'):
         profile.addresses.update(is_default=False)
-    address_values = {field: data.get(field, '') for field in ('full_name', 'phone', 'line1', 'line2', 'city', 'state', 'pincode', 'landmark')}
-    address_values['is_default'] = make_default
-    address = profile.addresses.create(**address_values)
+    address = profile.addresses.create(**{field: data.get(field, False if field == 'is_default' else '') for field in ('full_name', 'phone', 'line1', 'line2', 'city', 'state', 'pincode', 'landmark', 'is_default')})
     return JsonResponse(address_data(address), status=201)
 
 
@@ -805,17 +905,7 @@ def address_list(request):
 def address_detail(request, address_id):
     address = get_object_or_404(Address, id=address_id, customer__user=request.user)
     if request.method == 'DELETE':
-        was_default = address.is_default
-        customer = address.customer
-        try:
-            address.delete()
-        except ProtectedError:
-            return JsonResponse({'detail': 'This address is linked to an existing order and cannot be deleted.'}, status=409)
-        if was_default:
-            replacement = customer.addresses.order_by('id').first()
-            if replacement:
-                replacement.is_default = True
-                replacement.save(update_fields=['is_default', 'updated_at'])
+        address.delete()
         return JsonResponse({'detail': 'Address deleted.'})
     data = request.data
     if data.get('is_default'):

@@ -1,4 +1,4 @@
-﻿from decimal import Decimal
+from decimal import Decimal
 import json
 from unittest.mock import Mock, patch
 
@@ -16,7 +16,10 @@ class CheckoutAndAdminProductionTests(TestCase):
             username='buyer@example.test', email='buyer@example.test', password='Strong-password-123!'
         )
         self.customer = CustomerProfile.objects.create(user=self.customer_user)
-        self.admin_user = user_model.objects.create_user(
+        self.admin_user = user_model.objects.create_superuser(
+            username='root@example.test', email='root@example.test', password='Strong-password-123!'
+        )
+        self.staff_user = user_model.objects.create_user(
             username='staff@example.test', email='staff@example.test', password='Strong-password-123!', is_staff=True
         )
         self.category = Category.objects.create(name='Test Apparel', slug='test-apparel')
@@ -102,10 +105,30 @@ class CheckoutAndAdminProductionTests(TestCase):
         self.assertEqual(self.variant.stock_quantity, 2)
         self.assertEqual(order.payment_status, 'paid')
 
-    def test_customer_cannot_read_admin_orders(self):
+    def test_non_superuser_cannot_read_admin_api_or_django_admin(self):
         self.client.force_authenticate(user=self.customer_user)
         response = self.client.get('/api/admin/orders/')
         self.assertEqual(response.status_code, 403)
+
+        self.client.force_authenticate(user=self.staff_user)
+        response = self.client.get('/api/admin/orders/')
+        self.assertEqual(response.status_code, 403)
+        self.client.force_authenticate(user=None)
+        self.client.force_login(self.staff_user)
+        response = self.client.get('/admin/')
+        self.assertEqual(response.status_code, 403)
+        self.assertIn(b'You are not allowed', response.content)
+
+    def test_superuser_can_access_admin_api_and_django_admin(self):
+        superuser = self.admin_user
+        self.client.force_authenticate(user=superuser)
+        response = self.client.get('/api/admin/orders/')
+        self.assertEqual(response.status_code, 200, response.content)
+
+        self.client.force_authenticate(user=None)
+        self.client.force_login(superuser)
+        response = self.client.get('/admin/')
+        self.assertEqual(response.status_code, 200)
 
     def test_checkout_rejects_insufficient_stock(self):
         CartItem.objects.filter(cart=self.cart).update(quantity=5)

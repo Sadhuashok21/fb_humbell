@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import logo from "../imports/humbell512-1.png";
 import { Seo } from "./seo";
 import { AuthUser, addToCart as addCartItem, addToWishlist, CartItem, getCart, getCurrentUser, getProducts, removeFromWishlist, StoreProduct } from "./api";
+
+const logo = `${import.meta.env.BASE_URL}humbell-logo.png`;
 
 type IconName =
   | "search"
