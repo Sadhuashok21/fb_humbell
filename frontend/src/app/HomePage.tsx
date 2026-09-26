@@ -45,9 +45,16 @@ function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
 type HomeProduct = StoreProduct & { category: string; priceLabel: string; oldLabel: string; off: string };
 
 const categories = [
-  { label: "Linen Edit", sub: "Summer, simplified", image: "https://images.unsplash.com/photo-1643930757648-b0ec5c7a9dfa?crop=entropy&cs=tinysrgb&fit=crop&fm=jpg&q=85&w=800&h=1000" },
-  { label: "Workwear", sub: "Made to mean business", image: "https://images.unsplash.com/photo-1539125530496-3ca408f9c2d9?crop=entropy&cs=tinysrgb&fit=crop&fm=jpg&q=85&w=800&h=1000" },
-  { label: "After Hours", sub: "Own the evening", image: "https://images.unsplash.com/photo-1618902752068-62a02e3b2453?crop=entropy&cs=tinysrgb&fit=crop&fm=jpg&q=85&w=800&h=1000" },
+  { label: "T-Shirts", sub: "Everyday essentials", href: "/shop?category=t-shirts", image: "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=1000&q=85" },
+  { label: "Linen Edit", sub: "Summer, simplified", href: "/shop?category=shirts", image: "https://images.unsplash.com/photo-1643930757648-b0ec5c7a9dfa?crop=entropy&cs=tinysrgb&fit=crop&fm=jpg&q=85&w=800&h=1000" },
+  { label: "Workwear", sub: "Made to mean business", href: "/shop?category=shirts", image: "https://images.unsplash.com/photo-1539125530496-3ca408f9c2d9?crop=entropy&cs=tinysrgb&fit=crop&fm=jpg&q=85&w=800&h=1000" },
+  { label: "After Hours", sub: "Own the evening", href: "/shop?category=shirts", image: "https://images.unsplash.com/photo-1618902752068-62a02e3b2453?crop=entropy&cs=tinysrgb&fit=crop&fm=jpg&q=85&w=800&h=1000" },
+];
+
+const heroSlides = [
+  { image: "https://images.unsplash.com/photo-1596732395264-36901fb0db89?crop=entropy&cs=tinysrgb&fit=crop&fm=jpg&q=90&w=1800&h=1100", alt: "Model wearing a blue Oxford shirt", kicker: "THE NEW SIGNATURE COLLECTION", title: "Style that", emphasis: "speaks for you.", description: "Thoughtfully tailored shirts for men who make every moment count.", season: "NEW SEASON", product: "The Signature Blue Oxford", price: "₹1,499", href: "/product/blue-oxford" },
+  { image: "https://images.unsplash.com/photo-1627686011747-74adda3d2343?crop=entropy&cs=tinysrgb&fit=crop&fm=jpg&q=90&w=1800&h=1100", alt: "Model wearing a light linen shirt", kicker: "THE LINEN EDIT", title: "Light layers", emphasis: "made for more.", description: "Easy, breathable styles for bright mornings and long weekends.", season: "WARM WEATHER", product: "Ivory Linen Relaxed Shirt", price: "₹1,799", href: "/product/ivory-linen" },
+  { image: "https://images.unsplash.com/photo-1618902752068-62a02e3b2453?crop=entropy&cs=tinysrgb&fit=crop&fm=jpg&q=90&w=1800&h=1100", alt: "Model wearing a black layered jacket", kicker: "BUILT FOR AFTER HOURS", title: "Make an", emphasis: "entrance.", description: "Confident layers and considered details for nights that go somewhere.", season: "THE EVENING EDIT", product: "Black Premium Shacket", price: "₹2,599", href: "/product/black-leather" },
 ];
 
 function ProductCard({ product, onAdd }: { product: HomeProduct; onAdd: (product: HomeProduct) => void }) {
@@ -75,6 +82,7 @@ function ProductCard({ product, onAdd }: { product: HomeProduct; onAdd: (product
 }
 
 export default function HomePage() {
+  const [heroSlide, setHeroSlide] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
@@ -82,6 +90,12 @@ export default function HomePage() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [products, setProducts] = useState<HomeProduct[]>([]);
   const [productError, setProductError] = useState("");
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setHeroSlide((current) => (current + 1) % heroSlides.length), 6000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const showHeroSlide = (index: number) => setHeroSlide((index + heroSlides.length) % heroSlides.length);
 
   useEffect(() => {
     const refreshUser = () => {
@@ -166,6 +180,7 @@ export default function HomePage() {
         <nav className="nav">
           <a href="/shop?sort=new">New In <span>NEW</span></a>
           <a href="/shop">Shirts</a>
+          <a href="/shop?category=t-shirts">T-Shirts</a>
           <a href="/shop">Casual</a>
           <a href="/shop">Formal</a>
           <a href="/shop">Linen</a>
@@ -181,28 +196,41 @@ export default function HomePage() {
       <aside className={`mobile-drawer ${mobileOpen ? "open" : ""}`}>
         <div className="drawer-head"><a className="brand" href="#"><img src={logo} alt="" /><span>HUMBELL</span></a><button onClick={() => setMobileOpen(false)}><Icon name="close" /></button></div>
         <p>SHOP</p>
-        {["New In", "Shirts", "Casual", "Formal", "Linen", "Premium", "The Sale"].map((item) => <a href="#shop" onClick={() => setMobileOpen(false)} key={item}>{item}<Icon name="chevron" size={17} /></a>)}
+        {[
+          { label: "New In", href: "/shop?sort=new" },
+          { label: "Shirts", href: "/shop" },
+          { label: "T-Shirts", href: "/shop?category=t-shirts" },
+          { label: "Casual", href: "/shop" },
+          { label: "Formal", href: "/shop" },
+          { label: "Linen", href: "/shop" },
+          { label: "Premium", href: "/shop" },
+          { label: "The Sale", href: "/shop?sale=true" },
+        ].map((item) => <a href={item.href} onClick={() => setMobileOpen(false)} key={item.label}>{item.label}<Icon name="chevron" size={17} /></a>)}
         <p>YOUR ACCOUNT</p>
         <a href={user ? "/account" : "/signin"}>{user ? "View your account" : "Sign in / Create account"}<Icon name="chevron" size={17} /></a>
         <a href="/track-order">Track an order<Icon name="chevron" size={17} /></a>
       </aside>
 
       <main onClick={() => searchOpen && setSearchOpen(false)}>
-        <section className="hero">
-          <img className="hero-image" src="https://images.unsplash.com/photo-1596732395264-36901fb0db89?crop=entropy&cs=tinysrgb&fit=crop&fm=jpg&q=90&w=1800&h=1100" alt="Man confidently wearing a Humbell blue shirt" />
+        <section className="hero" aria-label="Humbell featured collections" aria-roledescription="carousel">
+          {heroSlides.map((slide, index) => <img key={slide.href} className={`hero-image ${index === heroSlide ? "active" : ""}`} src={slide.image} alt={slide.alt} aria-hidden={index !== heroSlide} />)}
           <div className="hero-shade" />
-          <div className="hero-content">
-            <p className="hero-kicker">THE NEW SIGNATURE COLLECTION</p>
-            <h1>Style that<br />speaks <i>for you.</i></h1>
-            <p>Thoughtfully tailored shirts for men who make every moment count.</p>
-            <div className="hero-buttons"><a className="button light" href="/shop">Shop shirts <Icon name="arrow" /></a><a className="button ghost" href="/shop?sort=new">Explore collection</a></div>
+          <div className="hero-content" key={heroSlide} aria-live="polite">
+            <p className="hero-kicker">{heroSlides[heroSlide].kicker}</p>
+            <h1>{heroSlides[heroSlide].title}<br /><i>{heroSlides[heroSlide].emphasis}</i></h1>
+            <p>{heroSlides[heroSlide].description}</p>
+            <div className="hero-buttons"><a className="button light" href={heroSlides[heroSlide].href}>Shop the edit <Icon name="arrow" /></a><a className="button ghost" href="/shop?sort=new">Explore collection</a></div>
           </div>
           <div className="hero-card">
-            <span>NEW SEASON</span>
-            <b>The Signature<br />Blue Oxford</b>
-            <div><strong>₹1,499</strong><a href="/product/blue-oxford">Shop look <Icon name="arrow" size={16} /></a></div>
+            <span>{heroSlides[heroSlide].season}</span>
+            <b>{heroSlides[heroSlide].product}</b>
+            <div><strong>{heroSlides[heroSlide].price}</strong><a href={heroSlides[heroSlide].href}>Shop look <Icon name="arrow" size={16} /></a></div>
           </div>
-          <div className="hero-dots"><span /><span className="active" /><span /></div>
+          <div className="hero-controls" aria-label="Choose featured slide">
+            <button className="hero-arrow" type="button" aria-label="Previous slide" onClick={() => showHeroSlide(heroSlide - 1)}><Icon name="arrow" size={18} /></button>
+            <div className="hero-dots">{heroSlides.map((slide, index) => <button key={slide.href} type="button" className={index === heroSlide ? "active" : ""} aria-label={`Show slide ${index + 1}: ${slide.product}`} aria-current={index === heroSlide ? "true" : undefined} onClick={() => showHeroSlide(index)} />)}</div>
+            <button className="hero-arrow next" type="button" aria-label="Next slide" onClick={() => showHeroSlide(heroSlide + 1)}><Icon name="arrow" size={18} /></button>
+          </div>
         </section>
 
         <section className="promise-strip">
@@ -220,7 +248,7 @@ export default function HomePage() {
           </div>
           <div className="category-grid">
             {categories.map((category) => (
-              <a className="category-card" href="/shop" key={category.label}>
+              <a className="category-card" href={category.href} key={category.label}>
                 <img src={category.image} alt={category.label} />
                 <div className="category-overlay" />
                 <div><p>{category.sub}</p><h3>{category.label}</h3><span>Shop the edit <Icon name="arrow" size={17} /></span></div>

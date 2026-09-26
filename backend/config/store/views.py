@@ -670,40 +670,6 @@ def create_payment_order(request):
 @api_view(['POST'])
 @authentication_classes([TokenAuthentication])
 @permission_classes([IsAuthenticated])
-def create_cod_order(request):
-    profile = profile_for(request.user)
-    address = profile.addresses.filter(id=request.data.get('address_id')).first()
-    if not address:
-        return JsonResponse({'detail': 'Choose a valid delivery address.'}, status=400)
-    cart = Cart.objects.filter(customer=profile).first()
-    items = list(cart.items.select_related('variant__product').all()) if cart else []
-    if not items:
-        return JsonResponse({'detail': 'Your cart is empty.'}, status=400)
-    for item in items:
-        if item.variant.stock_quantity < item.quantity:
-            return JsonResponse({'detail': f'Not enough stock for {item.variant.product.name} ({item.variant.size}).'}, status=409)
-    subtotal = sum((item.variant.product.price * item.quantity for item in items), Decimal('0'))
-    with transaction.atomic():
-        order = Order.objects.create(
-            customer=profile, address=address,
-            order_number=f'HBL-{int(time.time())}-{request.user.id}-{secrets.token_hex(2).upper()}',
-            subtotal=subtotal, total=subtotal, payment_status='pending', payment_reference='COD',
-        )
-        OrderItem.objects.bulk_create([
-            OrderItem(order=order, product=item.variant.product, variant=item.variant,
-                      quantity=item.quantity, unit_price=item.variant.product.price)
-            for item in items
-        ])
-        CartItem.objects.filter(cart=cart).delete()
-    return JsonResponse({
-        'order_number': order.order_number, 'status': order.status,
-        'payment_status': order.payment_status, 'payment_method': 'cod', 'total': str(order.total),
-    }, status=201)
-
-
-@api_view(['POST'])
-@authentication_classes([TokenAuthentication])
-@permission_classes([IsAuthenticated])
 def verify_payment(request):
     required = ('razorpay_order_id', 'razorpay_payment_id', 'razorpay_signature')
     if any(not request.data.get(field) for field in required):

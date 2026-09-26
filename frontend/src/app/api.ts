@@ -146,5 +146,4 @@ export async function addToWishlist(productId: number) { const result = await re
 export const removeFromWishlist = (productId: number) => request<{ detail: string }>(`/wishlist/${productId}/`, { method: "DELETE" });
 export const createSupportTicket = (subject: string, message: string) => request<{ id: number; status: string }>("/support/tickets/", { method: "POST", body: JSON.stringify({ subject, message }) });
 export const createPaymentOrder = (addressId: number) => request<PaymentOrder>("/payments/create-order/", { method: "POST", body: JSON.stringify({ address_id: addressId }) });
-export const createCodOrder = (addressId: number) => request<{ order_number: string; status: string; payment_status: string; payment_method: "cod"; total: string }>("/orders/cash-on-delivery/", { method: "POST", body: JSON.stringify({ address_id: addressId }) });
 export const verifyPayment = (payload: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string }) => request<{ verified: boolean; order_number: string }>("/payments/verify/", { method: "POST", body: JSON.stringify(payload) });
