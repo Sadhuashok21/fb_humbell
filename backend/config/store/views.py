@@ -784,6 +784,7 @@ def address_data(address):
 
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 @throttle_scope('signup_otp')
 def send_signup_otp(request):
@@ -813,6 +814,7 @@ def send_signup_otp(request):
 
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 @throttle_scope('signup')
 def signup(request):
@@ -824,7 +826,7 @@ def signup(request):
     User = get_user_model()
     if User.objects.filter(username=email).exists():
         return JsonResponse({'detail': 'An account with this email already exists.'}, status=409)
-    code = str(data.get('code', '')).strip()
+    code = str(data.get('otp', data.get('code', ''))).strip()
     verification = SignupVerification.objects.filter(email=email).order_by('-created_at').first()
     if not verification or not verification.expires_at or verification.expires_at <= timezone.now() or not code or not check_password(code, verification.code_hash):
         return JsonResponse({'detail': 'Enter a valid, unexpired email verification code.'}, status=400)
@@ -838,6 +840,7 @@ def signup(request):
 
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 @throttle_scope('login')
 def login(request):
