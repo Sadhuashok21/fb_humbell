@@ -1,0 +1,10 @@
+{
+  "description": "Discover premium men's fashion on this modern e-commerce platform, featuring seamless shopping, secure payments, and personalized customer experiences.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
