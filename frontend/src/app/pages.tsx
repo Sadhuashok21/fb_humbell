@@ -7,6 +7,18 @@ import { createCodOrder } from "./api";
 
 const logo = `${import.meta.env.BASE_URL}humbell-logo.png`;
 
+type PendingAuthAction = { type: "cart"; variantId: number; quantity: number; returnTo: string } | { type: "wishlist"; productId: number; returnTo: string };
+function deferAuthAction(action: PendingAuthAction) { sessionStorage.setItem("humbell_pending_auth_action", JSON.stringify(action)); }
+async function completePendingAuthAction(fallback: string) {
+  const raw = sessionStorage.getItem("humbell_pending_auth_action");
+  if (!raw) return fallback;
+  const action = JSON.parse(raw) as PendingAuthAction;
+  if (action.type === "cart") await addToCart(action.variantId, action.quantity);
+  else await addToWishlist(action.productId);
+  sessionStorage.removeItem("humbell_pending_auth_action");
+  return action.returnTo.startsWith("/") && !action.returnTo.startsWith("//") ? action.returnTo : fallback;
+}
+
 declare global { interface Window { Razorpay?: new (options: Record<string, unknown>) => { open: () => void }; } }
 
 function useCatalog(filters: Record<string, string | number> = {}) {
@@ -72,13 +84,13 @@ function CatalogCard({ item }: { item: StoreProduct }) {
   const [message, setMessage] = useState("");
   const navigate = useNavigate();
   const toggleWishlist = async () => {
-    if (!localStorage.getItem("humbell_token")) return navigate("/signin");
+    if (!localStorage.getItem("humbell_token")) { deferAuthAction({ type: "wishlist", productId: item.id, returnTo: `/product/${item.slug}` }); return navigate("/signin"); }
     try { if (liked) await removeFromWishlist(item.id); else await addToWishlist(item.id); setLiked(!liked); } catch (error) { setMessage((error as Error).message); }
   };
   const handleAdd = async () => {
-    if (!localStorage.getItem("humbell_token")) return navigate("/signin");
     const variant = item.variants[0];
     if (!variant) return setMessage("This product is currently unavailable.");
+    if (!localStorage.getItem("humbell_token")) { deferAuthAction({ type: "cart", variantId: variant.id, quantity: 1, returnTo: "/cart" }); return navigate("/signin"); }
     setAdding(true); setMessage("");
     try { await addToCart(variant.id); navigate("/cart"); } catch (error) { setMessage((error as Error).message); } finally { setAdding(false); }
   };
@@ -136,14 +148,14 @@ export function ProductPage() {
   const productImages = item.images?.length ? item.images : [item.image].filter(Boolean);
   const selectedImage = image && productImages.includes(image) ? image : productImages[0] || item.image;
   const handleAdd = async () => {
-    if (!localStorage.getItem("humbell_token")) return navigateToSignIn();
     const variant = item.variants.find((candidate) => candidate.size === size) || item.variants[0];
     if (!variant) return setCartError("This product is currently unavailable.");
+    if (!localStorage.getItem("humbell_token")) { deferAuthAction({ type: "cart", variantId: variant.id, quantity: qty, returnTo: "/cart" }); return navigateToSignIn(); }
     setAdding(true); setCartError("");
     try { await addToCart(variant.id, qty); window.location.href = "/cart"; } catch (error) { setCartError((error as Error).message); } finally { setAdding(false); }
   };
   const handleWishlist = async () => {
-    if (!localStorage.getItem("humbell_token")) { navigate("/signin"); return; }
+    if (!localStorage.getItem("humbell_token")) { deferAuthAction({ type: "wishlist", productId: item.id, returnTo: `/product/${item.slug}` }); navigate("/signin"); return; }
     setWishlistBusy(true); setCartError("");
     try { if (wishlisted) await removeFromWishlist(item.id); else await addToWishlist(item.id); setWishlisted(!wishlisted); }
     catch (requestError) { setCartError((requestError as Error).message); }
@@ -606,9 +618,9 @@ export function AuthPage() {
   const submit = async (event: React.FormEvent) => {
     event.preventDefault(); setError(""); setBusy(true);
     try {
-      if (!signup) { await signIn(email, password); navigate("/account"); return; }
+      if (!signup) { await signIn(email, password); navigate(await completePendingAuthAction("/account")); return; }
       if (!otpSent) { await sendSignupOtp(name, email, password); setOtpSent(true); setResendIn(60); setOtp(""); return; }
-      await signUp(name, email, phone, password, otp); navigate("/account");
+      await signUp(name, email, phone, password, otp); navigate(await completePendingAuthAction("/account"));
     } catch (requestError) { setError((requestError as Error).message); }
     finally { setBusy(false); }
   };

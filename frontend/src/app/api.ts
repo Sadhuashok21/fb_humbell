@@ -28,9 +28,9 @@ export type ProductFilters = { categories: { name: string; slug: string }[]; bra
 export type PaymentOrder = { id: string; amount: number; currency: string; key_id: string };
 export type CartItem = { id: number; quantity: number; variant_id: number; size: string; product: StoreProduct };
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, options: RequestInit = {}, includeAuth = true): Promise<T> {
   if (!API_URL) throw new Error("The production API URL is not configured. Set VITE_API_URL and rebuild the frontend.");
-  const token = localStorage.getItem("humbell_token");
+  const token = includeAuth ? localStorage.getItem("humbell_token") : null;
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
     headers: {
@@ -40,7 +40,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     },
   });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.detail || "Something went wrong");
+  if (!response.ok) {
+    if (includeAuth && response.status === 401 && /invalid token|authentication credentials/i.test(String(payload.detail || ""))) localStorage.removeItem("humbell_token");
+    throw new Error(payload.detail || "Something went wrong");
+  }
   return payload as T;
 }
 
@@ -49,21 +52,24 @@ async function uploadRequest<T>(path: string, form: FormData, method = "POST"): 
   const token = localStorage.getItem("humbell_token");
   const response = await fetch(`${API_URL}${path}`, { method, body: form, headers: token ? { Authorization: `Token ${token}` } : {} });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.detail || "Something went wrong");
+  if (!response.ok) {
+    if (response.status === 401 && /invalid token|authentication credentials/i.test(String(payload.detail || ""))) localStorage.removeItem("humbell_token");
+    throw new Error(payload.detail || "Something went wrong");
+  }
   return payload as T;
 }
 
 export async function signIn(email: string, password: string) {
-  const result = await request<{ token: string; user: AuthUser }>("/auth/login/", { method: "POST", body: JSON.stringify({ email, password }) });
+  const result = await request<{ token: string; user: AuthUser }>("/auth/login/", { method: "POST", body: JSON.stringify({ email, password }) }, false);
   localStorage.setItem("humbell_token", result.token);
   return result.user;
 }
 
 export const sendSignupOtp = (name: string, email: string, password: string) =>
-  request<{ detail: string }>("/auth/signup/send-otp/", { method: "POST", body: JSON.stringify({ full_name: name, email, password }) });
+  request<{ detail: string }>("/auth/signup/send-otp/", { method: "POST", body: JSON.stringify({ full_name: name, email, password }) }, false);
 
 export async function signUp(name: string, email: string, phone: string, password: string, otp: string) {
-  const result = await request<{ token: string; user: AuthUser }>("/auth/signup/", { method: "POST", body: JSON.stringify({ full_name: name, email, phone, password, otp }) });
+  const result = await request<{ token: string; user: AuthUser }>("/auth/signup/", { method: "POST", body: JSON.stringify({ full_name: name, email, phone, password, otp }) }, false);
   localStorage.setItem("humbell_token", result.token);
   return result.user;
 }
