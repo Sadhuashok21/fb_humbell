@@ -1,5 +1,6 @@
 import { createBrowserRouter } from "react-router";
 import HomePage from "./HomePage";
+import { LaunchControlPage, LaunchGate } from "./launch";
 import {
   AccountPage,
   AddressesPage,
@@ -19,6 +20,7 @@ import {
 } from "./pages";
 
 export const router = createBrowserRouter([
+  { element: <LaunchGate />, children: [
   { path: "/", Component: HomePage },
   { path: "/shop", Component: ShopPage },
   { path: "/search", Component: ShopPage },
@@ -32,6 +34,7 @@ export const router = createBrowserRouter([
   { path: "/account", Component: AccountPage },
   { path: "/addresses", Component: AddressesPage },
   { path: "/signin", Component: AuthPage },
+  { path: "/launch", Component: LaunchControlPage },
   { path: "/support", Component: SupportPage },
   { path: "/about", element: <ContentPage type="about" /> },
   { path: "/contact", element: <ContentPage type="contact" /> },
@@ -39,4 +42,5 @@ export const router = createBrowserRouter([
   { path: "/admin", Component: AdminPage },
   { path: "/admin/:section", Component: AdminPage },
   { path: "*", Component: NotFoundPage },
+  ] },
 ]);

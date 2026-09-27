@@ -14,7 +14,8 @@ export type Address = {
   is_default: boolean;
 };
 
-export type AuthUser = { id: number; name: string; email: string; phone?: string; is_superuser?: boolean };
+export type AuthUser = { id: number; name: string; email: string; phone?: string; is_superuser?: boolean; can_launch_site?: boolean };
+export type SiteLaunch = { is_active: boolean; launched_at: string | null; operators?: { id: number; email: string; first_name: string }[] };
 export type AdminProduct = { id: number; slug: string; name: string; brand: string; description: string; price: string; compare_at_price: string | null; image: string; images: string[]; image_items: { key: string; url: string }[]; image_url: string; category: string; tag: string; is_active: boolean; stock: number; skus: { id: number; size: string; sku: string; stock_quantity: number }[] };
 export type StoreProduct = { id: number; slug: string; name: string; brand: string; price: number; old: number; image: string; images: string[]; color: string; tag: string; description: string; category: string; variants: { id: number; size: string; sku: string; stock_quantity: number }[] };
 export type AdminSummary = { products: number; customers: number; orders: number; pending_orders: number; sales: string; recent_orders: { order_number: string; customer: string; status: string; total: string; created_at: string }[] };
@@ -33,6 +34,7 @@ async function request<T>(path: string, options: RequestInit = {}, includeAuth =
   const token = includeAuth ? localStorage.getItem("humbell_token") : null;
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
+    cache: options.cache || "no-store",
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Token ${token}` } : {}),
@@ -75,6 +77,10 @@ export async function signUp(name: string, email: string, phone: string, passwor
 }
 
 export const getCurrentUser = () => request<AuthUser>("/auth/me/");
+export const getSiteLaunchStatus = () => request<SiteLaunch>("/site/launch-status/", {}, false);
+export const getAdminSiteLaunch = () => request<SiteLaunch>("/admin/site-launch/");
+export const updateAdminSiteLaunch = (data: { is_active?: boolean; operator_email?: string; can_launch_site?: boolean }) => request<SiteLaunch>("/admin/site-launch/", { method: "PATCH", body: JSON.stringify(data) });
+export const launchWebsite = () => request<{ detail: string; is_active: boolean; launched_at: string }>("/site/launch/", { method: "POST", body: JSON.stringify({}) });
 export const changePassword = (current_password: string, new_password: string, confirm_password: string) =>
   request<{ detail: string }>("/auth/change-password/", { method: "POST", body: JSON.stringify({ current_password, new_password, confirm_password }) });
 
@@ -120,7 +126,7 @@ export async function getAdminProducts() {
 const normalizeAdminProduct = (product: AdminProduct) => ({ ...product, image: normalizeImage(product.image), images: (product.images?.length ? product.images : [product.image]).map(normalizeImage).filter(Boolean), image_items: (product.image_items || []).map((item) => ({ ...item, url: normalizeImage(item.url) })) });
 export const createAdminProduct = async (form: FormData) => normalizeAdminProduct(await uploadRequest<AdminProduct>("/admin/products/", form));
 export const updateAdminProduct = async (id: number, form: FormData) => normalizeAdminProduct(await uploadRequest<AdminProduct>(`/admin/products/${id}/`, form, "PATCH"));
-export const deleteAdminProduct = (id: number) => request<{ detail: string }>(`/admin/products/${id}/`, { method: "DELETE" });
+export const deleteAdminProduct = (id: number) => request<{ detail: string; archived?: boolean }>(`/admin/products/${id}/`, { method: "DELETE" });
 export const getAdminSummary = () => request<AdminSummary>("/admin/summary/");
 const normalizeOrderImages = <T extends UserOrder>(order: T): T => ({ ...order, items: order.items.map((item) => ({ ...item, image: normalizeImage(item.image) })) });
 export async function getOrders(status = "all") {

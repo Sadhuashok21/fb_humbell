@@ -30,7 +30,7 @@ from rest_framework.decorators import api_view, authentication_classes, permissi
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.permissions import AllowAny, BasePermission, IsAuthenticated
 
-from .models import Address, Cart, CartItem, Category, CustomerProfile, Order, OrderItem, Product, ProductImage, ProductVariant, SignupVerification, SupportTicket, WishlistItem
+from .models import Address, Cart, CartItem, Category, CustomerProfile, Order, OrderItem, Product, ProductImage, ProductVariant, SignupVerification, SiteLaunchState, SupportTicket, WishlistItem
 
 logger = logging.getLogger(__name__)
 
@@ -261,12 +261,22 @@ def admin_product_list(request):
 def admin_product_detail(request, product_id):
     product = get_object_or_404(Product, id=product_id)
     if request.method == 'DELETE':
-        if product.image:
-            default_storage.delete(product.image.name)
-        for gallery_image in product.gallery_images.all():
-            default_storage.delete(gallery_image.image.name)
-        product.delete()
-        return JsonResponse({'detail': 'Product deleted.'})
+        image_names = ([product.image.name] if product.image else []) + list(product.gallery_images.values_list('image', flat=True))
+        with transaction.atomic():
+            CartItem.objects.filter(variant__product=product).delete()
+            if OrderItem.objects.filter(product=product).exists():
+                product.is_active = False
+                product.save(update_fields=['is_active', 'updated_at'])
+                return JsonResponse({'detail': 'This product is part of an order history, so it was archived and removed from active listings.', 'archived': True})
+            try:
+                product.delete()
+            except ProtectedError:
+                product.is_active = False
+                product.save(update_fields=['is_active', 'updated_at'])
+                return JsonResponse({'detail': 'This product is still referenced by a record, so it was archived and removed from active listings.', 'archived': True})
+        for image_name in image_names:
+            default_storage.delete(image_name)
+        return JsonResponse({'detail': 'Product deleted.', 'archived': False})
     values, error = admin_product_payload(request, product)
     if error:
         return JsonResponse({'detail': error}, status=400)
@@ -815,7 +825,8 @@ def login(request):
     if not user:
         return JsonResponse({'detail': 'Invalid email or password.'}, status=401)
     token, _ = Token.objects.get_or_create(user=user)
-    return JsonResponse({'token': token.key, 'user': {'id': user.id, 'name': user.get_full_name(), 'email': user.email}})
+    profile = profile_for(user)
+    return JsonResponse({'token': token.key, 'user': {'id': user.id, 'name': user.get_full_name(), 'email': user.email, 'is_superuser': user.is_superuser, 'can_launch_site': profile.can_launch_site}})
 
 
 @api_view(['POST'])
@@ -831,7 +842,70 @@ def logout(request):
 @permission_classes([IsAuthenticated])
 def me(request):
     profile = profile_for(request.user)
-    return JsonResponse({'id': request.user.id, 'name': request.user.get_full_name(), 'email': request.user.email, 'phone': profile.phone, 'is_superuser': request.user.is_superuser})
+    return JsonResponse({'id': request.user.id, 'name': request.user.get_full_name(), 'email': request.user.email, 'phone': profile.phone, 'is_superuser': request.user.is_superuser, 'can_launch_site': profile.can_launch_site})
+
+
+def site_launch_state():
+    state, _ = SiteLaunchState.objects.get_or_create(pk=1)
+    return state
+
+
+@api_view(['GET'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def site_launch_status(request):
+    state = site_launch_state()
+    return JsonResponse({'is_active': state.is_active, 'launched_at': state.launched_at.isoformat() if state.launched_at else None})
+
+
+@api_view(['GET', 'PATCH'])
+@authentication_classes([TokenAuthentication])
+@permission_classes([IsSuperuser])
+def admin_site_launch(request):
+    state = site_launch_state()
+    if request.method == 'GET':
+        operators = get_user_model().objects.filter(customer_profile__can_launch_site=True).values('id', 'email', 'first_name')
+        return JsonResponse({'is_active': state.is_active, 'launched_at': state.launched_at.isoformat() if state.launched_at else None, 'operators': list(operators)})
+
+    if 'is_active' in request.data:
+        active = request.data.get('is_active')
+        if not isinstance(active, bool):
+            return JsonResponse({'detail': 'is_active must be true or false.'}, status=400)
+        state.is_active = active
+        if active:
+            state.launched_at = None
+        elif not state.launched_at:
+            state.launched_at = timezone.now()
+        state.save(update_fields=['is_active', 'launched_at', 'updated_at'])
+
+    if 'operator_email' in request.data:
+        email = request.data.get('operator_email', '').strip().lower()
+        enabled = request.data.get('can_launch_site')
+        if not email or not isinstance(enabled, bool):
+            return JsonResponse({'detail': 'Provide an operator email and a true/false can_launch_site value.'}, status=400)
+        user = get_user_model().objects.filter(email__iexact=email).first()
+        if not user:
+            return JsonResponse({'detail': 'No account was found with that email. Ask the operator to create an account first.'}, status=404)
+        profile = profile_for(user)
+        profile.can_launch_site = enabled
+        profile.save(update_fields=['can_launch_site', 'updated_at'])
+
+    operators = get_user_model().objects.filter(customer_profile__can_launch_site=True).values('id', 'email', 'first_name')
+    return JsonResponse({'is_active': state.is_active, 'launched_at': state.launched_at.isoformat() if state.launched_at else None, 'operators': list(operators)})
+
+
+@api_view(['POST'])
+@authentication_classes([TokenAuthentication])
+@permission_classes([IsAuthenticated])
+def launch_site(request):
+    profile = profile_for(request.user)
+    if not request.user.is_superuser and not profile.can_launch_site:
+        return JsonResponse({'detail': 'You are not allowed to launch this website.'}, status=403)
+    state = site_launch_state()
+    state.is_active = False
+    state.launched_at = timezone.now()
+    state.save(update_fields=['is_active', 'launched_at', 'updated_at'])
+    return JsonResponse({'detail': 'The website is now live.', 'is_active': False, 'launched_at': state.launched_at.isoformat()})
 
 
 @api_view(['POST'])

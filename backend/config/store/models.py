@@ -76,6 +76,15 @@ class ProductVariant(TimeStampedModel):
 class CustomerProfile(TimeStampedModel):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='customer_profile')
     phone = models.CharField(max_length=30, blank=True)
+    can_launch_site = models.BooleanField(default=False)
+
+
+class SiteLaunchState(TimeStampedModel):
+    is_active = models.BooleanField(default=False)
+    launched_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return 'Website launch state'
 
 
 class SignupVerification(TimeStampedModel):
