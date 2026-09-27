@@ -66,14 +66,14 @@ function ProductCard({ product, onAdd }: { product: HomeProduct; onAdd: (product
   return (
     <article className="product-card">
       <div className="product-image">
-        <img src={product.image} alt={`${product.name} worn by a male model`} />
+        <a className="product-photo-link" href={`/product/${product.slug}`} aria-label={`View ${product.name}`}><img src={product.image} alt={`${product.name} worn by a male model`} /></a>
         <span className="deal-pill">BESTSELLER</span>
         <button className={`heart-button ${liked ? "liked" : ""}`} onClick={toggleWishlist} aria-label="Add to wishlist"><Icon name="heart" /></button>
         <button className="quick-add" onClick={() => onAdd(product)}>Quick add</button>
       </div>
       <div className="product-info">
         <p className="eyebrow">{product.category}</p>
-        <h3>{product.name}</h3>
+        <h3><a href={`/product/${product.slug}`}>{product.name}</a></h3>
         <div className="price-line"><strong>{product.priceLabel}</strong><del>{product.oldLabel}</del><em>{product.off}</em></div>
         <div className="product-meta"><span>{product.color}</span><span>S · M · L · XL · XXL</span></div>
       </div>
@@ -136,6 +136,7 @@ export default function HomePage() {
   };
   const cartCount = cartItems.reduce((count, item) => count + item.quantity, 0);
   const cartTotal = cartItems.reduce((total, item) => total + item.product.price * item.quantity, 0);
+  const featuredProduct = products.length ? products[heroSlide % products.length] : null;
 
   return (
     <div className="site-shell">
@@ -185,7 +186,7 @@ export default function HomePage() {
           <a href="/shop">Formal</a>
           <a href="/shop">Linen</a>
           <a href="/shop">Premium</a>
-          <a href="/shop?sale=true" className="sale-link">The Sale</a>
+          <a href="/shop?discount=10" className="sale-link">The Sale</a>
           <div />
           <a href="/track-order">Track Order</a>
           <a href="/support">Help</a>
@@ -204,7 +205,7 @@ export default function HomePage() {
           { label: "Formal", href: "/shop" },
           { label: "Linen", href: "/shop" },
           { label: "Premium", href: "/shop" },
-          { label: "The Sale", href: "/shop?sale=true" },
+          { label: "The Sale", href: "/shop?discount=10" },
         ].map((item) => <a href={item.href} onClick={() => setMobileOpen(false)} key={item.label}>{item.label}<Icon name="chevron" size={17} /></a>)}
         <p>YOUR ACCOUNT</p>
         <a href={user ? "/account" : "/signin"}>{user ? "View your account" : "Sign in / Create account"}<Icon name="chevron" size={17} /></a>
@@ -213,29 +214,29 @@ export default function HomePage() {
 
       <main onClick={() => searchOpen && setSearchOpen(false)}>
         <section className="hero" aria-label="Humbell featured collections" aria-roledescription="carousel">
-          {heroSlides.map((slide, index) => <img key={slide.href} className={`hero-image ${index === heroSlide ? "active" : ""}`} src={slide.image} alt={slide.alt} aria-hidden={index !== heroSlide} />)}
+          {heroSlides.map((slide, index) => <img key={slide.kicker} className={`hero-image ${index === heroSlide ? "active" : ""}`} src={slide.image} alt={slide.alt} aria-hidden={index !== heroSlide} />)}
           <div className="hero-shade" />
           <div className="hero-content" key={heroSlide} aria-live="polite">
             <p className="hero-kicker">{heroSlides[heroSlide].kicker}</p>
             <h1>{heroSlides[heroSlide].title}<br /><i>{heroSlides[heroSlide].emphasis}</i></h1>
             <p>{heroSlides[heroSlide].description}</p>
-            <div className="hero-buttons"><a className="button light" href={heroSlides[heroSlide].href}>Shop the edit <Icon name="arrow" /></a><a className="button ghost" href="/shop?sort=new">Explore collection</a></div>
+            <div className="hero-buttons"><a className="button light" href={featuredProduct ? `/product/${featuredProduct.slug}` : "/shop"}>{featuredProduct ? "Shop this product" : "Shop the collection"} <Icon name="arrow" /></a><a className="button ghost" href="/shop?sort=new">Explore collection</a></div>
           </div>
           <div className="hero-card">
             <span>{heroSlides[heroSlide].season}</span>
-            <b>{heroSlides[heroSlide].product}</b>
-            <div><strong>{heroSlides[heroSlide].price}</strong><a href={heroSlides[heroSlide].href}>Shop look <Icon name="arrow" size={16} /></a></div>
+            <b>{featuredProduct?.name || "Explore the Humbell collection"}</b>
+            <div>{featuredProduct && <strong>₹{featuredProduct.price.toLocaleString("en-IN")}</strong>}<a href={featuredProduct ? `/product/${featuredProduct.slug}` : "/shop"}>{featuredProduct ? "Shop look" : "Explore"} <Icon name="arrow" size={16} /></a></div>
           </div>
           <div className="hero-controls" aria-label="Choose featured slide">
             <button className="hero-arrow" type="button" aria-label="Previous slide" onClick={() => showHeroSlide(heroSlide - 1)}><Icon name="arrow" size={18} /></button>
-            <div className="hero-dots">{heroSlides.map((slide, index) => <button key={slide.href} type="button" className={index === heroSlide ? "active" : ""} aria-label={`Show slide ${index + 1}: ${slide.product}`} aria-current={index === heroSlide ? "true" : undefined} onClick={() => showHeroSlide(index)} />)}</div>
+            <div className="hero-dots">{heroSlides.map((slide, index) => <button key={slide.kicker} type="button" className={index === heroSlide ? "active" : ""} aria-label={`Show slide ${index + 1}: ${slide.kicker}`} aria-current={index === heroSlide ? "true" : undefined} onClick={() => showHeroSlide(index)} />)}</div>
             <button className="hero-arrow next" type="button" aria-label="Next slide" onClick={() => showHeroSlide(heroSlide + 1)}><Icon name="arrow" size={18} /></button>
           </div>
         </section>
 
         <section className="promise-strip">
           <div><Icon name="truck" /><span><b>Free delivery</b><small>On orders over ₹999</small></span></div>
-          <div><Icon name="refresh" /><span><b>Easy 15-day returns</b><small>No questions asked</small></span></div>
+          <div><Icon name="refresh" /><span><b>7-day returns</b><small>Request a return within 7 days of delivery</small></span></div>
           <div><Icon name="shield" /><span><b>Secure payments</b><small>Razorpay protected</small></span></div>
           <div><Icon name="shield" /><span><b>Premium quality</b><small>Crafted to last</small></span></div>
         </section>
@@ -263,7 +264,7 @@ export default function HomePage() {
             <a href="/shop">View all shirts <Icon name="arrow" size={18} /></a>
           </div>
           <div className="product-grid">
-            {productError ? <p role="alert">Unable to load products: {productError}</p> : products.map((product) => <ProductCard key={product.id} product={product} onAdd={addToCart} />)}
+            {productError ? <p role="alert">Unable to load products: {productError}</p> : products.length ? products.map((product) => <ProductCard key={product.id} product={product} onAdd={addToCart} />) : <p>No products are available right now. <a href="/shop">Browse the shop</a>.</p>}
           </div>
         </section>
 
@@ -295,25 +296,21 @@ export default function HomePage() {
           </div>
         </section>
 
-        <section className="newsletter">
-          <div><p>THE HUMBELL EDIT</p><h2>Good style, delivered.</h2><span>New drops, private offers and considered style advice. No clutter.</span></div>
-          <form onSubmit={(event) => event.preventDefault()}><input type="email" placeholder="Your email address" aria-label="Email address" /><button>Join the list <Icon name="arrow" size={18} /></button></form>
-        </section>
       </main>
 
       <footer id="support">
         <div className="footer-top">
-          <div className="footer-brand"><a className="brand" href="#"><img src={logo} alt="" /><span>HUMBELL<small>WEAR YOUR STORY</small></span></a><p>Everyday confidence, thoughtfully made. Premium menswear for modern India.</p><div className="socials"><a href="#" aria-label="Instagram"><Icon name="instagram" /></a><a href="#" aria-label="Facebook"><Icon name="facebook" /></a><a href="#" aria-label="Youtube"><Icon name="youtube" /></a></div></div>
-          <div><h3>Shop</h3><a href="#">New arrivals</a><a href="#">Best sellers</a><a href="#">Formal shirts</a><a href="#">Casual shirts</a><a href="#">The sale</a></div>
-          <div><h3>Help</h3><a href="#">Track order</a><a href="#">Returns & refunds</a><a href="#">Size guide</a><a href="#">Contact us</a><a href="#">FAQs</a></div>
-          <div><h3>About</h3><a href="#">Our story</a><a href="#">Careers</a><a href="#">Privacy policy</a><a href="#">Terms & conditions</a><a href="#">Shipping policy</a></div>
-          <div className="contact"><h3>We're here to help</h3><a href="tel:+918000000000">+91 80000 00000</a><a href="mailto:care@humbell.in">care@humbell.in</a><small>Mon–Sat, 9 AM–7 PM</small><span>SECURE PAYMENTS</span><p>Razorpay &nbsp; · &nbsp; UPI &nbsp; · &nbsp; VISA</p></div>
+          <div className="footer-brand"><a className="brand" href="/"><img src={logo} alt="" /><span>HUMBELL<small>WEAR YOUR STORY</small></span></a><p>Everyday confidence, thoughtfully made. Premium menswear for modern India.</p></div>
+          <div><h3>Shop</h3><a href="/shop?sort=new">New arrivals</a><a href="/shop?sort=best">Best sellers</a><a href="/shop?q=formal">Formal shirts</a><a href="/shop?q=casual">Casual shirts</a><a href="/shop?discount=10">The sale</a><a href="/shop?category=t-shirts">T-Shirts</a></div>
+          <div><h3>Help</h3><a href="/track-order">Track order</a><a href="/policies/returns">Returns & refunds</a><a href="/support">Size guide</a><a href="/contact">Contact us</a><a href="/support">FAQs</a></div>
+          <div><h3>About</h3><a href="/about">Our story</a><a href="mailto:humbellfs123@gmail.com?subject=Careers%20at%20Humbell">Careers</a><a href="/policies/privacy">Privacy policy</a><a href="/policies/terms">Terms & conditions</a><a href="/policies/shipping">Shipping policy</a></div>
+          <div className="contact"><h3>We're here to help</h3><a href="tel:+919573464809">+91 95734 64809</a><a href="mailto:humbellfs123@gmail.com">humbellfs123@gmail.com</a><small>Mon–Sat, 9 AM–7 PM</small><span>SECURE PAYMENTS</span><p>Razorpay &nbsp; · &nbsp; UPI &nbsp; · &nbsp; VISA</p></div>
         </div>
-        <div className="footer-bottom"><span>© 2026 Humbell. All rights reserved.</span><span>Designed with purpose in India.</span></div>
+        <div className="footer-bottom"><span>© 2026 Humbell. All rights reserved.</span><span>Designed with purpose in India.</span><a className="footer-credit" href="https://www.ascentracoresolutions.com/" target="_blank" rel="noopener noreferrer">Powered by Ascentracore Solutions</a></div>
       </footer>
 
       <nav className="mobile-bottom">
-        <a className="active" href="#"><Icon name="menu" /><span>Home</span></a>
+        <a className="active" href="/"><Icon name="menu" /><span>Home</span></a>
         <a href="/search"><Icon name="search" /><span>Search</span></a>
         <a href="/shop"><Icon name="menu" /><span>Categories</span></a>
         <a href="/cart"><Icon name="bag" /><i>{cartCount}</i><span>Bag</span></a>
