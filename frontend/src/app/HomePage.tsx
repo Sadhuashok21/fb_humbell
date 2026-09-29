@@ -208,7 +208,7 @@ export default function HomePage() {
           { label: "The Sale", href: "/shop?discount=10" },
         ].map((item) => <a href={item.href} onClick={() => setMobileOpen(false)} key={item.label}>{item.label}<Icon name="chevron" size={17} /></a>)}
         <p>YOUR ACCOUNT</p>
-        <a href={user ? "/account" : "/signin"}>{user ? "View your account" : "Sign in / Create account"}<Icon name="chevron" size={17} /></a>
+        <a href={user ? "/account" : "/create-account"}>{user ? "View your account" : "Sign in / Create account"}<Icon name="chevron" size={17} /></a>
         <a href="/track-order">Track an order<Icon name="chevron" size={17} /></a>
       </aside>
 
@@ -273,7 +273,7 @@ export default function HomePage() {
             <p>HUMBELL MEMBER DAYS</p>
             <h2>More style.<br />More rewards.</h2>
             <span>Join HUMBELL Circle and enjoy early access, member pricing and a birthday surprise.</span>
-            <div><a className="button light" href="/signin">Join for free <Icon name="arrow" /></a><a href="/signin">Sign in</a></div>
+            <div><a className="button light" href="/create-account">Join for free <Icon name="arrow" /></a><a href="/signin">Sign in</a></div>
           </div>
           <div className="blue-visual">
             <img src="https://images.unsplash.com/photo-1627686011747-74adda3d2343?crop=entropy&cs=tinysrgb&fit=crop&fm=jpg&q=85&w=1000&h=900" alt="Humbell member in a crisp white shirt" />

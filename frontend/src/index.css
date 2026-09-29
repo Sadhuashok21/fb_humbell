@@ -426,11 +426,9 @@ footer { background: #0d1828; color: #fff; }
 .buy-row .primary-action { flex: 1; }
 .wish-action { width: 50px; border: 1px solid #d7dce1; background: white; font-size: 20px; }
 .wish-action.active { border-color: #b43c50; color: #b43c50; }
-.buy-now { height: 49px; margin-top: 8px; display: grid; place-items: center; background: var(--ink); color: white; font-size: 11px; font-weight: 700; }
-.delivery-box { position: relative; margin-top: 22px; padding: 16px; display: flex; flex-direction: column; border: 1px solid #e0e4e8; }
-.delivery-box b { font-size: 10px; }
-.delivery-box span { margin-top: 3px; color: #657080; font-size: 9px; }
-.delivery-box button { position: absolute; right: 15px; top: 20px; border: 0; background: none; color: var(--blue); font-size: 8px; }
+.buy-now { width: 100%; height: 49px; margin-top: 8px; display: grid; place-items: center; border: 0; background: var(--ink); color: white; font-size: 11px; font-weight: 700; cursor: pointer; }
+.checkout-summary-item { align-items: flex-start; gap: 12px; }
+.checkout-summary-item span { color: #697386; }
 .accordions { margin-top: 15px; border-top: 1px solid #e0e4e8; }
 .accordions button { width: 100%; padding: 14px 0; display: flex; justify-content: space-between; border: 0; border-bottom: 1px solid #e0e4e8; background: white; font-size: 10px; text-align: left; }
 .related { padding-top: 70px; }
@@ -453,13 +451,10 @@ footer { background: #0d1828; color: #fff; }
 .cart-item-actions > button { border: 0; border-bottom: 1px solid #aeb4bc; background: none; color: #5f6977; font-size: 8px; }
 .order-summary { padding: 25px; border: 1px solid #e1e5e9; box-shadow: 0 6px 25px rgba(17,29,45,.05); background: white; }
 .order-summary h2 { margin: 0 0 22px; font: 500 18px Manrope; }
-.order-summary > div:not(.coupon) { margin: 11px 0; display: flex; justify-content: space-between; font-size: 10px; }
+.order-summary > div { margin: 11px 0; display: flex; justify-content: space-between; font-size: 10px; }
 .order-summary .saving { color: #177153; }
 .order-summary hr { margin: 18px 0; border: 0; border-top: 1px solid #e0e4e8; }
 .order-summary .summary-total { font-size: 14px !important; }
-.coupon { height: 39px; margin: 20px 0 13px; display: flex; }
-.coupon input { flex: 1; min-width: 0; padding: 0 10px; border: 1px solid #dce1e5; font-size: 9px; }
-.coupon button { border: 0; background: var(--ink); color: white; font-size: 9px; }
 .order-summary > .primary-action { width: 100%; }
 .order-summary > small { display: block; margin-top: 12px; color: #79828e; font-size: 8px; text-align: center; }
 .checkout-page { max-width: 1200px; min-height: 780px; margin: auto; padding: 45px 30px 90px; }
@@ -751,10 +746,13 @@ footer { background: #0d1828; color: #fff; }
 .admin-charts h2, .admin-table-card h2 { margin: 0; font: 600 13px Manrope; }
 .admin-charts header p, .admin-table-card header p { margin: 3px 0 0; color: #7a8491; font-size: 7px; }
 .admin-charts select { padding: 7px; border: 1px solid #dbe0e4; font-size: 8px; }
+.admin-period-filter { display: flex; align-items: center; gap: 8px; color: #6d7886; font-size: 8px; }
+.admin-period-filter select { padding: 7px; border: 1px solid #dbe0e4; background: white; color: var(--ink); font-size: 8px; }
 .chart-area { height: 270px; position: relative; padding: 22px 30px 20px 48px; display: flex; flex-direction: column; justify-content: space-between; box-sizing: border-box; background-image: linear-gradient(#edf0f2 1px, transparent 1px); background-size: 100% 25%; }
 .chart-area > span { position: relative; left: -38px; color: #84909c; font-size: 7px; }
 .chart-area svg { position: absolute; inset: 28px 25px 30px 48px; width: calc(100% - 73px); height: calc(100% - 58px); }
 .chart-area > div { position: absolute; left: 48px; right: 25px; bottom: 10px; display: flex; justify-content: space-between; color: #7b8692; font-size: 7px; }
+.chart-area .chart-labels { pointer-events: none; }
 .donut-card { padding: 18px; }
 .donut { width: 125px; height: 125px; margin: 22px auto; display: grid; place-items: center; border-radius: 50%; background: conic-gradient(#0876bb 0 68%, #53a5d7 68% 86%, #e5a94d 86% 96%, #d76057 96%); }
 .donut:before { content: ""; width: 82px; height: 82px; position: absolute; border-radius: 50%; background: white; }
@@ -775,6 +773,9 @@ footer { background: #0d1828; color: #fff; }
 .admin-toolbar input, .admin-toolbar select { min-height: 36px; padding: 0 10px; border: 1px solid #dbe0e4; background: white; font-size: 8px; }
 .admin-toolbar input { width: 230px; }
 .admin-toolbar > button { padding: 0 15px; border: 0; background: var(--blue); color: white; font-size: 8px; }
+.admin-pagination { display: flex; justify-content: center; gap: 6px; padding: 16px 0; }
+.admin-pagination button { min-width: 34px; height: 34px; border: 1px solid #dbe0e4; background: white; color: var(--ink); cursor: pointer; }
+.admin-pagination button.active { border-color: var(--blue); background: var(--blue); color: white; }
 .table-product { display: flex; align-items: center; gap: 8px; }
 .table-product img { width: 34px; height: 40px; object-fit: cover; object-position: top; }
 .table-product div { display: flex; flex-direction: column; }
@@ -988,8 +989,8 @@ body { font-size: 18px; }
 .product-info .eyebrow, .product-meta, .story-body, .story-points small, .review-grid article > p,
 .newsletter div > span, .route-footer a:not(.route-brand), .route-footer p, .breadcrumbs,
 .shop-title p, .shop-title label, .filter-panel label, .active-filters span, .catalog-body > small,
-.catalog-actions a, .detail-copy, .tax, .option-head, .delivery-box span, .accordions button,
-.cart-item p, .cart-item-actions > button, .order-summary > div:not(.coupon), .coupon input,
+.catalog-actions a, .detail-copy, .tax, .option-head, .accordions button,
+.cart-item p, .cart-item-actions > button, .order-summary > div,
 .checkout-steps > div, .address-form label, .pay-fields label, .delivery-options label,
 .payment-tabs button, .pay-fields p, .success-page > span, .success-address,
 .account-page > aside > a, .profile-card label, .security-card p, .order-tabs button,

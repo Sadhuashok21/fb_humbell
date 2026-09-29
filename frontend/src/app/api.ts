@@ -23,7 +23,7 @@ export type UserOrder = { id: number; order_number: string; status: string; paym
 export type AdminOrder = UserOrder & { customer: string; email: string };
 export type AdminCustomer = { id: number; name: string; email: string; phone: string; order_count: number; total_spent: string; joined_at: string };
 export type AdminTicket = { id: number; subject: string; message: string; status: string; customer: string; email: string; created_at: string };
-export type AdminAnalytics = { orders: number; gross_sales: string; cod_orders: number; cod_sales: string; online_orders: number; online_sales: string; pending_orders: number; statuses: { status: string; count: number }[]; daily_sales: { date: string; orders: number; sales: string }[] };
+export type AdminAnalytics = { period: string; orders: number; gross_sales: string; cod_orders: number; cod_sales: string; online_orders: number; online_sales: string; pending_orders: number; statuses: { status: string; count: number }[]; daily_sales: { date: string; orders: number; sales: string }[] };
 export type AdminNotification = { id: string; kind: string; title: string; detail: string; created_at: string; url: string };
 export type ProductFilters = { categories: { name: string; slug: string }[]; brands: string[]; sizes: string[]; colors: string[]; price: { min: string | number; max: string | number } };
 export type PaymentOrder = { id: string; amount: number; currency: string; key_id: string };
@@ -141,7 +141,7 @@ export const updateAdminOrderStatus = (id: number, status: string) => request<{ 
 export const getAdminCustomers = () => request<{ results: AdminCustomer[] }>("/admin/customers/");
 export const getAdminTickets = () => request<{ results: AdminTicket[] }>("/admin/support/");
 export const updateAdminTicket = (id: number, status: string) => request<AdminTicket>(`/admin/support/${id}/`, { method: "PATCH", body: JSON.stringify({ status }) });
-export const getAdminAnalytics = () => request<AdminAnalytics>("/admin/analytics/");
+export const getAdminAnalytics = (period = "7d") => request<AdminAnalytics>(`/admin/analytics/?period=${encodeURIComponent(period)}`);
 export const getAdminNotifications = () => request<{ count: number; results: AdminNotification[] }>("/admin/notifications/");
 export async function getCart() { const result = await request<{ results: (Omit<CartItem, "product"> & { product: Parameters<typeof normalizeProduct>[0] })[] }>("/cart/"); return { results: result.results.map((item) => ({ ...item, product: normalizeProduct(item.product) })) }; }
 export async function addToCart(variantId: number, quantity = 1) { const result = await request<{ results: (Omit<CartItem, "product"> & { product: Parameters<typeof normalizeProduct>[0] })[] }>("/cart/", { method: "POST", body: JSON.stringify({ variant_id: variantId, quantity }) }); return { results: result.results.map((item) => ({ ...item, product: normalizeProduct(item.product) })) }; }
@@ -151,5 +151,5 @@ export async function getWishlist() { const result = await request<{ results: Pa
 export async function addToWishlist(productId: number) { const result = await request<{ results: Parameters<typeof normalizeProduct>[0][] }>("/wishlist/", { method: "POST", body: JSON.stringify({ product_id: productId }) }); return { results: result.results.map(normalizeProduct) }; }
 export const removeFromWishlist = (productId: number) => request<{ detail: string }>(`/wishlist/${productId}/`, { method: "DELETE" });
 export const createSupportTicket = (subject: string, message: string) => request<{ id: number; status: string }>("/support/tickets/", { method: "POST", body: JSON.stringify({ subject, message }) });
-export const createPaymentOrder = (addressId: number) => request<PaymentOrder>("/payments/create-order/", { method: "POST", body: JSON.stringify({ address_id: addressId }) });
-export const verifyPayment = (payload: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string }) => request<{ verified: boolean; order_number: string }>("/payments/verify/", { method: "POST", body: JSON.stringify(payload) });
+export const createPaymentOrder = (addressId: number, buyNow?: { variant_id: number; quantity: number; slug: string }) => request<PaymentOrder>("/payments/create-order/", { method: "POST", body: JSON.stringify({ address_id: addressId, ...buyNow }) });
+export const verifyPayment = (payload: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string }, preserveCart = false) => request<{ verified: boolean; order_number: string }>("/payments/verify/", { method: "POST", body: JSON.stringify({ ...payload, preserve_cart: preserveCart }) });
