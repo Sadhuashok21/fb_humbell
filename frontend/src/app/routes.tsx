@@ -34,6 +34,7 @@ export const router = createBrowserRouter([
   { path: "/account", Component: AccountPage },
   { path: "/addresses", Component: AddressesPage },
   { path: "/signin", Component: AuthPage },
+  { path: "/create-account", Component: AuthPage },
   { path: "/launch", Component: LaunchControlPage },
   { path: "/support", Component: SupportPage },
   { path: "/about", element: <ContentPage type="about" /> },

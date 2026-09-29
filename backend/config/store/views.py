@@ -521,20 +521,27 @@ def admin_support_ticket_update(request, ticket_id):
 @permission_classes([IsSuperuser])
 def admin_analytics(request):
     orders = Order.objects.all()
-    paid_or_cod = orders.exclude(status=Order.Status.CANCELLED)
+    period = request.query_params.get('period', '7d')
+    period_days = {'7d': 7, '30d': 30, '90d': 90, 'year': None}
+    if period not in period_days:
+        period = '7d'
+    today = timezone.localdate()
+    start_date = today - timedelta(days=period_days[period] - 1) if period_days[period] else today.replace(month=1, day=1)
+    period_orders = orders.filter(created_at__date__gte=start_date, created_at__date__lte=today)
+    paid_or_cod = period_orders.exclude(status=Order.Status.CANCELLED)
     online = paid_or_cod.exclude(payment_reference='COD')
     cod = paid_or_cod.filter(payment_reference='COD')
     daily = []
-    for day in range(6, -1, -1):
-        date = timezone.localdate() - timedelta(days=day)
+    for day in range((today - start_date).days, -1, -1):
+        date = today - timedelta(days=day)
         day_orders = paid_or_cod.filter(created_at__date=date)
         daily.append({'date': date.isoformat(), 'orders': day_orders.count(), 'sales': str(sum(item.total for item in day_orders))})
     return JsonResponse({
-        'orders': orders.count(), 'gross_sales': str(sum(order.total for order in paid_or_cod)),
+        'period': period, 'orders': period_orders.count(), 'gross_sales': str(sum(order.total for order in paid_or_cod)),
         'cod_orders': cod.count(), 'cod_sales': str(sum(order.total for order in cod)),
         'online_orders': online.count(), 'online_sales': str(sum(order.total for order in online)),
-        'pending_orders': orders.filter(status=Order.Status.PENDING).count(),
-        'statuses': [{'status': status, 'count': orders.filter(status=status).count()} for status, _ in Order.Status.choices],
+        'pending_orders': period_orders.filter(status=Order.Status.PENDING).count(),
+        'statuses': [{'status': status, 'count': period_orders.filter(status=status).count()} for status, _ in Order.Status.choices],
         'daily_sales': daily,
     })
 
@@ -633,8 +640,23 @@ def support_ticket_create(request):
 @permission_classes([IsAuthenticated])
 def create_payment_order(request):
     profile = profile_for(request.user)
-    cart = Cart.objects.filter(customer=profile).first()
-    items = list(cart.items.select_related('variant__product').all()) if cart else []
+    variant_id = request.data.get('variant_id')
+    if variant_id not in (None, ''):
+        try:
+            quantity = int(request.data.get('quantity', 1))
+        except (TypeError, ValueError):
+            return JsonResponse({'detail': 'Choose a valid product quantity.'}, status=400)
+        if quantity < 1:
+            return JsonResponse({'detail': 'Product quantity must be at least one.'}, status=400)
+        product_slug = str(request.data.get('slug', '')).strip()
+        if not product_slug:
+            return JsonResponse({'detail': 'The selected product is missing.'}, status=400)
+        variant = get_object_or_404(ProductVariant.objects.select_related('product'), id=variant_id, product__slug=product_slug, product__is_active=True)
+        items = [(variant, quantity)]
+    else:
+        cart = Cart.objects.filter(customer=profile).first()
+        cart_items = list(cart.items.select_related('variant__product').all()) if cart else []
+        items = [(item.variant, item.quantity) for item in cart_items]
     address_id = request.data.get('address_id')
     address = profile.addresses.filter(id=address_id).first() if address_id else None
     if address_id and not address:
@@ -644,10 +666,10 @@ def create_payment_order(request):
         return JsonResponse({'detail': 'Your cart is empty.'}, status=400)
     if not address:
         return JsonResponse({'detail': 'Add a delivery address before payment.'}, status=400)
-    for item in items:
-        if item.variant.stock_quantity < item.quantity:
-            return JsonResponse({'detail': f'Not enough stock for {item.variant.product.name} ({item.variant.size}).'}, status=409)
-    subtotal = sum((item.variant.product.price * item.quantity for item in items), Decimal('0'))
+    for variant, quantity in items:
+        if variant.stock_quantity < quantity:
+            return JsonResponse({'detail': f'Not enough stock for {variant.product.name} ({variant.size}).'}, status=409)
+    subtotal = sum((variant.product.price * quantity for variant, quantity in items), Decimal('0'))
     if not settings.RAZORPAY_KEY_ID or not settings.RAZORPAY_SECRET:
         return JsonResponse({'detail': 'Razorpay is not configured on the backend.'}, status=503)
     client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_SECRET))
@@ -666,9 +688,9 @@ def create_payment_order(request):
             subtotal=subtotal, total=subtotal, payment_reference=payment_order['id'],
         )
         OrderItem.objects.bulk_create([
-            OrderItem(order=order, product=item.variant.product, variant=item.variant,
-                      quantity=item.quantity, unit_price=item.variant.product.price)
-            for item in items
+            OrderItem(order=order, product=variant.product, variant=variant,
+                      quantity=quantity, unit_price=variant.product.price)
+            for variant, quantity in items
         ])
     return JsonResponse({
         'id': payment_order['id'], 'amount': payment_order['amount'],
@@ -728,7 +750,8 @@ def verify_payment(request):
         order.status = Order.Status.CANCELLED
         order.save(update_fields=['payment_reference', 'payment_status', 'status', 'updated_at'])
         return JsonResponse({'detail': 'Inventory ran out. Razorpay has been asked to refund your payment.'}, status=409)
-    CartItem.objects.filter(cart__customer__user=request.user).delete()
+    if not request.data.get('preserve_cart', False):
+        CartItem.objects.filter(cart__customer__user=request.user).delete()
     return JsonResponse({'verified': True, 'payment_id': request.data['razorpay_payment_id'], 'order_number': order.order_number})
 
 

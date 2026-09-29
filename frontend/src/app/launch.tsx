@@ -13,7 +13,7 @@ export function LaunchGate() {
     return () => { window.clearInterval(timer); window.removeEventListener("humbell-launch-state-change", refresh); };
   }, [refresh]);
 
-  const allowedPath = location.pathname === "/signin" || location.pathname.startsWith("/admin") || location.pathname === "/launch";
+  const allowedPath = location.pathname === "/signin" || location.pathname === "/create-account" || location.pathname.startsWith("/admin") || location.pathname === "/launch";
   if (!launch && !allowedPath) return <main className="launch-screen launch-checking"><div className="launch-check-message">HUMBELL <span>·</span> PREPARING SOMETHING SPECIAL</div></main>;
   if (!launch || !launch.is_active || allowedPath) return <Outlet />;
   return <ComingSoon />;
